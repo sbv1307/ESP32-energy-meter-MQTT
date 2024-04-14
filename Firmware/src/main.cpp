@@ -43,13 +43,14 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.1"
 
 /* Version history:
  *  1.0.0   Initial production version.
  *  2.0.0   Using MQTT broker as a storage for configuration data and energy meter counts, read/write from/to SD memory card has been implemnted.
  *          Struct data_t re-defined and split up to config_t, meta_t and data_t for optimal file read / write funktionality.
  *          Publishing totals, Subtotals and pulscorrections to MQTT has been replaced be write to SD Memory card.
+ *  2.0.1   MQTT Reconnect bugfix
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -181,7 +182,6 @@ uint16_t numberOfWrites = 0;
 const uint8_t channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2_GPIO,private_Metr3_GPIO,private_Metr4_GPIO,
                                                 private_Metr5_GPIO,private_Metr6_GPIO,private_Metr7_GPIO,private_Metr8_GPIO};  
 
-bool versionTopic_NOT_Published = true;               // Only publish SKETCH_VERSION once
 bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing the configuration to HA if required.
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
 bool LED_Toggled = false; 
@@ -246,7 +246,7 @@ void indicateError( uint8_t delayExtends) {
   while (true) {
     digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
     for ( uint8_t ii = 0; ii > delayExtends; ii++)
-      delay( 2 * BLIP);
+      delay( 4 * BLIP);
   }
 }
 
@@ -373,7 +373,6 @@ void publish_sketch_version() {  // Publish only once at every reboot.
                                   String(ip[3]));
 
   mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
-  versionTopic_NOT_Published = false;
 }
 
 /* ###################################################################################################
@@ -843,7 +842,7 @@ void loop() {
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
       WiFiConnectAttempt = millis();
       WiFiConnectPostpone = WIFI_CONNECT_POSTPONE;
-      blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
+      blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
     } else {
       WiFiConnectAttempt = 0;
@@ -915,11 +914,10 @@ void loop() {
     ArduinoOTA.handle();
     
     // >>>>>>>>>>>>>>>>>>> Connect to MQTT Broker <<<<<<<<<<<<<<<<<<<<<<<<<<
-    if (!mqttClient.connected()) {
+    if (!mqttClient.connected() and millis() > MQTTConnectAttempt + MQTTConnectPostpone ) {
       String will = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
 
-      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False") and\
-                              millis() > MQTTConnectAttempt + MQTTConnectPostpone ) {
+      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False")) {
 
         MQTTConnectAttempt = 0;
         MQTTConnectPostpone = 0;
@@ -927,8 +925,7 @@ void loop() {
         esp32Connected = true;
 
         //   >>>>>>>>>>>>>>>>>>>>>   publish will and SKETCH_VERSION   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-        if (versionTopic_NOT_Published) // Publish only once at every reboot.
-          publish_sketch_version();
+        publish_sketch_version();
 
         //   >>>>>>>>>>>>>>>>>>>>  Subscribe to Set Totals and Reset Suttotals topic  <<<<<<<<<<<<<<<<<
         String totalSetTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/+" + MQTT_SUFFIX_TOTAL_TRESHOLD);
@@ -948,7 +945,7 @@ void loop() {
       } else {
         MQTTConnectAttempt = millis();
         MQTTConnectPostpone = MQTT_CONNECT_POSTPONE;
-        blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
+        blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
         esp32Connected = false;
       }
     }
@@ -958,7 +955,7 @@ void loop() {
   // >>> Process incomming messages and maintain connection to the server
   if ( esp32Connected) {
     if(!mqttClient.loop()) {
-      blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
+      blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
     }
   }
