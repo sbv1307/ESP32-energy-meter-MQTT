@@ -20,3 +20,6 @@ Library/*
 fp-lib-table
 jlcpcb/*
 sym-lib-table
+
+# Developer files  
+developer/*

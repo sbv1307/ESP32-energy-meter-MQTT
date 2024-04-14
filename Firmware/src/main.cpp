@@ -7,6 +7,8 @@
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
 #include <privateConfig.h>
+#include "SD.h"
+#include "SPI.h"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -41,16 +43,55 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "PlatfomIO projext: Esp32 MQTT interface for Carlo Gavazzi energy meter - V1.0.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0"
 
 /* Version history:
  *  1.0.0   Initial production version.
- *
+ *  2.0.0   Using MQTT broker as a storage for configuration data and energy meter counts, read/write from/to SD memory card has been implemnted.
+ *          Struct data_t re-defined and split up to config_t, meta_t and data_t for optimal file read / write funktionality.
+ *          Publishing totals, Subtotals and pulscorrections to MQTT has been replaced be write to SD Memory card.
+ *          
+ * Boot analysis:
+ * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
+ * Time to set pinmode and led: 0
+ * Time to initialise globals and arm ISR: 2
+ * Time to initialise SD: 345 /  10
+ * Time to read configuration 7
+ * Time to initialise test structure version  0
+ * Time to read datafiles 1611
+ * Time to write new configuration file: 327 / 31
+ * Time to write new data: 4162
+ * ### Failed connection to WiFi ########
+ *    Time to connect to WiFi: 155
+ *    Time to wait for failed connection to WiFi: 2501
+ *    Time to connect to WiFi: 31
+ *    Time to wait for failed connection to WiFi: 1
+ *    Time to connect to WiFi: 18
+ *    Time to wait for failed connection to WiFi: 0
+ * ###  Sucessfull connection to WiFi, Failed connect to MQTT  ###
+ *    Time to connect to WiFi: 155
+ *    Time to wait for successfull connection to WiFi: 2001
+ * Time to start OTA: 18
+ * Time to failed connect to MQTT: 3006
+ * Time to failed connect to MQTT: 3006
+ * 
+ * Suggestions to tune the boot process: 
+ * - Look into the use of SdFat library and the use of fixed CS instead of SD library, this might speed up the SD Card operations.
+ *   Might be an issue if a new config file is required (Changes done to the configuraion will require a scan throuh all existing files)
+ * - Give the process time to handle incomming IRQ's between WiFi connect and MQTT connect. (DONE ny ignoring connet attempts if IRQ's available)
+ * 
  *  Future versions:
+ *  
+ * 
+ *  - Ideas: as writes to SD for each Energy meter count will be intensive, implement a method to write thise data to diffenret locations.  
+ *           Considder to implement rename of data file instead of creating new datafiles and keeping track of old to avoid re-use of SD memory location.
+ *           If NTP Server will give date and time, datafiles can be renamed to date and time and the sam data file names can be used. 
+ *  - Finetune MQTT_MAX_PACKET_SIZE in platformio.ini. Definition: MQTT_MAX_PACKET_SIZE < MQTT_MAX_HEADER_SIZE + 2 + strlen(topic) + payload length
+ *    where MQTT_MAX_HEADER_SIZE is defined as 5.
+ *  - Reduce boot time to reduce loss of Energy meter pulses. Might require use of SdFat library  instead of SD library.
+ *  - Imnplement get time from NTP Server to reset subTotals (See: https://randomnerdtutorials.com/esp32-microsd-card-arduino/)
  *  - Imlement ESP.restart() if required. Consider to implement EEPROM.write() https://randomnerdtutorials.com/esp32-flash-memory/
  *    during call to ESP.resart(). Writes for every update will kill flash memory. 
- *  - Implement read/write from/to SD memory card instead of using MQTT broker as a storage for configuration data and energy meter counts.
- *    Ideas: as writes to SD for each Energy meter count will be intensive, implement a method to write thise data to diffenret locations.    
  */
 
 /*
@@ -60,45 +101,47 @@
  * ######################################################################################################################################
  * ######################################################################################################################################
  */
-#define NO_OF_MQTT_ATTEMPTS 100000      // Define the number of times mqttClient.loop will be called in the initialation phase, where
-                                        // stored values at the MQTT broker is read. 
-                                        // Too less and not all entries will be read.
-                                        // Too many the program stays in the loop too long, and energy meter pulses might be missed.
-
-#define WIFI_CONNECT_POSTPONE 2000      // Number of millis between WiFi connect attempts, when WiFi.begin fails to connect. 
-                                        // To prevent unessecary connetc attempts.
-#define BLIP 250                        // Time in milliseconds the LED will blink
+#define CONFIGURATON_VERSION 2
+/* WiFi and MQTT connect attempt issues. 
+ * IRQ's will be registrated, but the counters for will not be updated during the calls to WiFi and MQTT connect. If more than one pulse
+ * from then same meter arrives, it will be lost if these calls takes up too much time. Setting a long connect postpone will reduce the loss
+ * of pulses
+*/
+#define WIFI_CONNECT_POSTPONE 30000     // Number of millis between WiFi connect attempts, when WiFi.begin fails to connect.
+#define MQTT_CONNECT_POSTPONE 30000     // Number of millisecunds between MQTT connect dattempts, when MQTT connect fails to connect.
+#define BLIP 100                        // Time in milliseconds the LED will blink
 #define MAX_COMSUMPTION 2200            // Maximum of Watt comsumptino to be registrated. A software method to prevent fake pulses
 #define MIN_CONSUMPTION 25              // Define the minimum powerconsumption published before publishing 0
                                         // See '>>>    Pulse time check  <<<' in the last part of the loop() for further details.
 #define RETAINED true                   // Used in MQTT puplications. Can be changed during development and bugfixing.
 #define UNRETAINED false
 #define MAX_NO_OF_CHANNELS 8
+#define NUMBER_OF_WRITES 65500          // Number of writes made to data file, before new set of datafiles will be used (MAX 2^16)
 
 /* Configurable MQTT difinitions
  * These definitions can be changed to suitable nanes.
  * Chagens might effect other inntegrations and configurations in HA!
  */
 
-const String   MQTT_CLIENT = "Carlo-Gavazzi-Energy-Meters_";       // mqtt client_id prefix. Will be suffixed with Esp32 mac to make it unique
+const String  MQTT_CLIENT = "Carlo-Gavazzi-Energy-Meters_";       // mqtt client_id prefix. Will be suffixed with Esp32 mac to make it unique
 
 const String  MQTT_PREFIX                   = "energy/";              // include tailing '/' in prefix!
 const String  MQTT_DEVICE_NAME              = "monitor_ESP32_";       // only alfanumeric and no '/'
 const String  MQTT_DISCOVERY_PREFIX         = "homeassistant/";       // include tailing '/' in discovery prefix!
 const String  MQTT_PREFIX_DEVICE            = "meter_";
 const String  MQTT_ONLINE                   = "/online"; 
-const String  MQTT_STATUS                   = "status";
 const String  MQTT_SENSOR_ENERG_ENTITYNAME  = "Subtotal";  // name dislayed in HA device. No special chars, no spaces
 const String  MQTT_SENSOR_POWER_ENTITYNAME  = "Forbrug";   // name dislayed in HA device. No special chars, no spaces
 const String  MQTT_NUMBER_ENERG_ENTITYNAME  = "Total";     // name dislayed in HA device. No special chars, no spaces
 const String  MQTT_PULSTIME_CORRECTION      = "pulscorr";
 const String  MQTT_SKTECH_VERSION           = "/sketch_version";
-const String  MQTT_SUFFIX_CONFIG            = "/config";
-const String  MQTT_SUFFIX_VALUES            = "/values";
-const String  MQTT_SUFFIX_TOTAL_TRESHOLD    = "/threshold";
 const String  MQTT_SUFFIX_STATE             = "/state";
-const String  MQTT_SUFFIX_SUBTOTAL_RESET    = "/subtotal_reset";
 const String  MQTT_SUFFIX_CONSUMPTION       = "/watt_consumption";
+// MQTT Subscription topics
+const String  MQTT_SUFFIX_TOTAL_TRESHOLD    = "/threshold";
+const String  MQTT_SUFFIX_SUBTOTAL_RESET    = "/subtotal_reset";
+const String  MQTT_SUFFIX_CONFIG            = "/config";
+const String  MQTT_SUFFIX_STATUS            = "status";
 
 /*  None configurable MQTT definitions
  *  These definitions are all defined in 'HomeAssistand -> MQTT' and cannot be changed.
@@ -108,40 +151,77 @@ const String  MQTT_NUMBER_COMPONENT         = "number";
 const String  MQTT_ENERGY_DEVICECLASS       = "energy";
 const String  MQTT_POWER_DEVICECLASS        = "power";
 
+/*
+ * File configurations
+ * All files will be placed in the root of the SD Card. File System FS.h will not be implemented.
+ * There will be one configuration file and a data file for each energy meter connected (defined in privateConfig.h). 
+ * As writes to data files will occour on every pulse registered, writes to the SD Card will be intensive.
+ * To prevent SD Card failures, a new set of datafiles will be used at every reboot or for every 65.500** pulses counted.
+ * Filenames will be created like "data file set name"_"datafile name" where '_' simulate the '/'
+ * in a filesystem representation (E.g: /dfs-1_df-1). 
+ * Data file sets will have an ending number 0 - 2^16 (65536 the max for a uint16_t)
+ * Data files will have an ending number 0 - (MAX_NO_OF_CHANNELS - 1). 
+ * 
+ * ** 65.500 pulses will be equal tp 65,50kWh registered on a Carlo Gavazzi type EM111 energy meter.
+*/
+const String CONFIGURATION_FILENAME = "/config.cfg ";   // Filenames has to start with '/'
+const String DATAFILESET_POSTFIX    = "/dfs-";          // Will bee the leading part ("postfix") of the datafile name and act as a kined of directory name
+const String FILENAME_POSTFIX       = "_df-";           // Leading '_' simulate the '/' in a filesystem representation. 
+const String FILENAME_SUFFIX        = ".dat";           //
+
+
 String mqttDeviceNameWithMac;
 String mqttClientWithMac;
 
-int GlobalIRQ_PIN_index = 0;
+uint16_t blip = BLIP;
+uint8_t GlobalIRQ_PIN_index = 0;
+uint16_t numberOfWrites = 0;
 
 // Define array of GPIO pin numbers used for IRQ.
-const int channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2_GPIO,private_Metr3_GPIO,private_Metr4_GPIO,
-                                                    private_Metr5_GPIO,private_Metr6_GPIO,private_Metr7_GPIO,private_Metr8_GPIO};  
-
-byte totalsSetForPin = 0;                       // Each bit in this byte represent a status for a specific energy meter.
-                                                // A bit is set when an interrupt for the specific energy meter occours.
+const uint8_t channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2_GPIO,private_Metr3_GPIO,private_Metr4_GPIO,
+                                                private_Metr5_GPIO,private_Metr6_GPIO,private_Metr7_GPIO,private_Metr8_GPIO};  
 
 bool versionTopic_NOT_Published = true;               // Only publish SKETCH_VERSION once
-bool totalsUpdatedFromMQTT = false;                   // Update totals from MQTT (Backup) only at startup.
 bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing the configuration to HA if required.
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
-bool LED_Toggled = false;                             
+bool LED_Toggled = false; 
+bool LED_Invertred = false;
+
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+
+// Define structure for configuration
+struct config_t
+  {
+    uint8_t structureVersion;
+    unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
+    uint16_t dataFileSetNumber;               // In which data file set ("directory") the data files will be located.
+    uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
+  } interfaceConfig;
+
+// Define stgructure for meta data
+struct meta_t
+  {
+    unsigned long pulseTimeStamp;   // Stores timestamp, Usec to calculate millis bewteen pulses ==> Calsulate consupmtion.
+    unsigned long pulseLength;      // Sorees time between pulses. Used to publish 0 to powerconsumption, when pulses stops arriving == poser comsumptino reduced
+  } metaData[PRIVATE_NO_OF_CHANNELS];
 
 // Define structure for energy meter counters
 struct data_t
   {
-    long pulseTotal;                // For counting total number of pulses on each Channel
-    long pulseSubTotal;             // For counting number of pulses within a period 
-    unsigned long pulseTimeStamp;   // Stores timestamp, Usec to calculate millis bewteen pulses ==> Calsulate consupmtion.
-    unsigned long pulseLength;      // Sorees time between pulses. Used to publish 0 to powerconsumption, when pulses stops arriving == poser comsumptino reduced
-    int  pulse_per_kWh;             // Number of pulses as defined for each energy meter
+    unsigned long pulseTotal;                // For counting total number of pulses on each Channel
+    unsigned long pulseSubTotal;             // For counting number of pulses within a period 
   } meterData[PRIVATE_NO_OF_CHANNELS];
 
-unsigned long pulseTimeCorrection = 0;  // Used to calibrate the calculated consumption.
-unsigned long WiFiConnectAttempt = 0;   // 
-unsigned long WiFiConnectPostpone = 0;
-unsigned long LED_toggledAt = 0;
+/* Wariables to handle connect postpones and length of LED blinks*/
+unsigned long WiFiConnectAttempt = 0;   // Timestamp when an attempt to connect to WiFi were done
+unsigned long MQTTConnectAttempt = 0;   // Timestamp when an attempt to connect to MQtT were done
+
+unsigned long WiFiConnectPostpone = 0;  // Millisecunds between each attempt to connect to WiFi.
+unsigned long MQTTConnectPostpone = 0;  // Millisecunds between each attempt to connect to MQTT.
+
+unsigned long LED_toggledAt = 0;        // Timestamp when an IRQ tuggels the LED
+
 volatile unsigned long millsTimeStamp[PRIVATE_NO_OF_CHANNELS];  // Used by the ISR to store exactly when an interrupt occoured. 
                                                                 // Used to calculate consuption.
 volatile uint8_t  IRQ_PINs_stored = 0b00000000;   // Used by the ISR to register which energy meter caused an interrupt.
@@ -156,18 +236,108 @@ volatile uint8_t  IRQ_PINs_stored = 0b00000000;   // Used by the ISR to register
  * ###################################################################################################
 */
 
+/*
+ * Flashing LED to indicate an error
+ * 
+ */
+void indicateError( uint8_t delayExtends) {
+  
+
+  while (true) {
+    digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+    for ( uint8_t ii = 0; ii > delayExtends; ii++)
+      delay( 2 * BLIP);
+  }
+}
+
+/* ###################################################################################################
+ *               W R I T E   C O N F I G   D A T A
+ * ###################################################################################################
+ */
+void writeConfigData() {
+  String configFilename = String(CONFIGURATION_FILENAME);
+  File structFile = SD.open(configFilename, FILE_WRITE);
+  if (!structFile)
+    indicateError(1);
+  structFile.seek(0);
+  structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig));
+  structFile.close();
+}
+
+/* ###################################################################################################
+ *               W R I T E   M E T E R   D A T A
+ * ###################################################################################################
+ */
+void writeMeterDataFile( uint8_t datafileNumber) {
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
+  File structFile = SD.open(filename, FILE_WRITE);
+  if (!structFile)
+    indicateError(2);
+  structFile.seek(0);
+  structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber]));
+  structFile.close(); 
+}
+
+void writeMeterData(uint8_t datafileNumber) {
+  if ( numberOfWrites++ >  NUMBER_OF_WRITES) {
+    interfaceConfig.dataFileSetNumber++;
+    writeConfigData();
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+      writeMeterDataFile(ii);
+  } else
+    writeMeterDataFile(datafileNumber);
+
+
+}
+
+/* ###################################################################################################
+ *               S E T    C O N F I G U R A T I O N    D E F A U L T S
+ * ###################################################################################################
+ * This function is called when:
+ * - a new SD Card is present
+ * - Changes has been done to the 'config_t' structure
+ * - when the number of channels (PRIVATE_NO_OF_CHANNELS) has been changed.
+ * The function will delite the old configuration file and create a new one.
+ * It will skip all existing data file sets.
+ * - uint8_t structureVersion;
+ * - unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
+ * - uint16_t dataFileSetNumber;                  // In which data file set ("directory") the data files will be located.
+ * - uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
+ */
+
+void setConfigurationDefaults() {
+  interfaceConfig.structureVersion = (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS;
+  interfaceConfig.pulseTimeCorrection = 0;  // Used to calibrate the calculated consumption.
+
+  // Find new data file set for data files == Skip all existing data files.
+  uint8_t numberOfFilesExists = PRIVATE_NO_OF_CHANNELS;
+  for ( uint16_t filesetNumber = 0; numberOfFilesExists == PRIVATE_NO_OF_CHANNELS; filesetNumber++) {
+    interfaceConfig.dataFileSetNumber = filesetNumber;
+    numberOfFilesExists = 0;
+    for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++) {
+      String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
+      if (SD.exists(dataFileName))
+        numberOfFilesExists++;
+    }
+  }
+  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+    interfaceConfig.pulse_per_kWh[ii] = private_default_pulse_per_kWh[ii];    // Number of pulses as defined for each energy meter
+
+  String filename = String(CONFIGURATION_FILENAME);
+  if (SD.exists(filename)) {
+    SD.remove(filename);
+  }
+  writeConfigData();
+}
+
 /* ###################################################################################################
  *                     I N I T I A L I Z E   G L O B A L S
  * ###################################################################################################
  */
 void initializeGlobals() {
-  // >>>>>>>>>>>>>   Set defaults for meterData.
-  for (int ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
-    meterData[ii].pulseTotal = 0;
-    meterData[ii].pulseSubTotal = 0;
-    meterData[ii].pulseTimeStamp = 0;
-    meterData[ii].pulseLength = 0;
-    meterData[ii].pulse_per_kWh = private_default_pulse_per_kWh[ii];
+  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+    metaData[ii].pulseTimeStamp = 0;
+    metaData[ii].pulseLength = 0;
 
     // >>>>>>>>>>    Set flag for publishing HA configuration   <<<<<<<<<<<<< 
     configurationPublished[ii] = false;
@@ -184,36 +354,6 @@ void initializeGlobals() {
   mqttClientWithMac = String(MQTT_CLIENT + macStr);
 }
 
-
-/* ###################################################################################################
- *                     B Y T E    S E T
- * ###################################################################################################
-*/
-/*
- * Description
- * Sets (writes a '1' to) a number of bits of a returned byte value.
- * 
- * Syntax
- * byte byteVariable = bitSet(NumberOfBitsToBeSet);
- * 
- * Parameters
- * NumberOfBitsToBeSet: the numeric variable for the nuymber of bits to be set,
- * starting at the least-significant (rightmost) bit.
- * 
- * Returns
- * byte
- * 
- * Example
- * bitSet(5), returnes '0b00011111'
- */
-byte byteset(u_int8_t numberOfBitsToSet) {
-  byte byteVariable = 0;
-  for ( int ii = 0; ii < numberOfBitsToSet; ii++) {
-    bitSet(byteVariable, ii);
-  }
-  return byteVariable;
-}
-
 /* ###################################################################################################
  *                  P U B L I S H   S K E T C H   V E R S I O N
  * ###################################################################################################
@@ -223,8 +363,15 @@ byte byteset(u_int8_t numberOfBitsToSet) {
  *  This will return the value of (SKETCH_VERSION)
  */
 void publish_sketch_version() {  // Publish only once at every reboot.
+  IPAddress ip = WiFi.localIP();
   String versionTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SKTECH_VERSION);
-  String versionMessage = String(SKETCH_VERSION);
+  String versionMessage = String(SKETCH_VERSION + String("\nConnected to SSID: \'") +\
+                                  String(PRIVATE_WIFI_SSID) + String("\' at: ") +\
+                                  String(ip[0]) + String(".") +\
+                                  String(ip[1]) + String(".") +\
+                                  String(ip[2]) + String(".") +\
+                                  String(ip[3]));
+
   mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
   versionTopic_NOT_Published = false;
 }
@@ -236,7 +383,7 @@ void publish_sketch_version() {  // Publish only once at every reboot.
  * 
 */
 void publishStatuMessage(String statusMessage) {  // Publish only once at every reboot.
-  String statusTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + MQTT_STATUS);
+  String statusTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + MQTT_SUFFIX_STATUS);
   mqttClient.publish(statusTopic.c_str(), statusMessage.c_str(), RETAINED);
 }
 
@@ -247,8 +394,8 @@ void publishStatuMessage(String statusMessage) {  // Publish only once at every 
  * IRQ pin reference is expected to be les than 2 digits!
  */
 byte getIRQ_PIN_reference(char* topic) {
-  unsigned int startIndex = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/").length();
-  int i = 0;
+  uint16_t startIndex = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/").length();
+  uint16_t i = 0;
   uint8_t result = 0;
   while(topic[startIndex + i] != '/' && i < 2) {  // IRQ pin reference les than 2 digits!
     result = result * 10 + (topic[startIndex+i]-'0');
@@ -268,11 +415,11 @@ void updateGoogleSheets( boolean powerOn) {
   // >>>>>>>>>>>>>   Create data-URL string for HTTP request   <<<<<<<<<<<<<<<<<<
   String urlData = "/exec?meterData=";
 
-  for ( int IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
-    urlData += String( float(meterData[IRQ_PIN_index].pulseTotal) / float(meterData[IRQ_PIN_index].pulse_per_kWh), 2) + ",";
+  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
+    urlData += String( float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2) + ",";
   
-  for ( int IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) {
-    urlData += String( float(meterData[IRQ_PIN_index].pulseSubTotal) / float(meterData[IRQ_PIN_index].pulse_per_kWh), 2);
+  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) {
+    urlData += String( float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2);
     if ( IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS - 1)
       urlData += String(",");
   }
@@ -298,46 +445,6 @@ void updateGoogleSheets( boolean powerOn) {
     //---------------------------------------------------------------------
     http.end();
   }
-}
-
-/*
- * ###################################################################################################
- *                       U p d a t e   T o t a l s   f r o m   M Q T T
- * ###################################################################################################
- */;/*
- * Input: 
- * - Globals: totalsSetForPin. This byte variable is changed by the 'mqttCallback' function.
- *   The MQTT Callback function will set the bits in the byte totalsSetForPin
- *   when the value for a specific total and subtotal is set.
- *   'updateTotalsFromMQTT' will compare totalsSetForPin to a bitmask and set the 
- *   return value to true, if all bits in totalsSetForPin is set.
- * Return:
- * - True, when all data_t.pulseTotal and data_t.pulseSubTotal entries in the data_t sructure has been updated
- *   with values published to totalTopic and subtotalTopic
- * 
- *  This function is part of the process to restore configuration data , Totals and subTotals after a restart.
- *  When tehes data can be read from SD memory, this function is no longer needed.
- 
-*/
-bool updateTotalsFromMQTT() {
-  bool allTotalsUpdated = false;
-
-  // >>>>>>>>>>>>>>>>  Subscribe to MQTT MQTT_SUFFIX_VALUES  <<<<<<<<<<<<<<<<<<<<<<
-  String valueTopic = String( MQTT_PREFIX + mqttDeviceNameWithMac + "/+" + MQTT_SUFFIX_VALUES);
-  mqttClient.subscribe(valueTopic.c_str(), 1);
-
-  //  >>>>>>>>>>>>>>>>>>>>>   Process incomming MQTT messages   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< 
-  for ( int ii = 0; ii < NO_OF_MQTT_ATTEMPTS & !allTotalsUpdated; ii++) {
-    mqttClient.loop();
-    if( totalsSetForPin == byteset(PRIVATE_NO_OF_CHANNELS)) {
-      allTotalsUpdated = true;
-    }
-  }
-
-  // >>>>>>>>>>>>>> Unsubscribe valueTopic <<<<<<<<<<<<<<<<<<<<<<<<<
-  mqttClient.unsubscribe(valueTopic.c_str());
-
-  return allTotalsUpdated;
 }
 
 /*
@@ -492,44 +599,14 @@ void publishSensorJson( long powerConsumption, uint8_t IRQ_PIN_index) {
   uint8_t payload[256];
   JsonDocument doc;
 
-  doc[MQTT_SENSOR_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseSubTotal) / float(meterData[IRQ_PIN_index].pulse_per_kWh);
+  doc[MQTT_SENSOR_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
   doc[MQTT_SENSOR_POWER_ENTITYNAME] = powerConsumption;
-  doc[MQTT_NUMBER_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseTotal) / float(meterData[IRQ_PIN_index].pulse_per_kWh);
+  doc[MQTT_NUMBER_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
 
   size_t length = serializeJson(doc, payload);
   String sensorTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_PREFIX + MQTT_PREFIX_DEVICE + IRQ_PIN_index + MQTT_SUFFIX_STATE);
 
   mqttClient.publish(sensorTopic.c_str(), payload, length, UNRETAINED);
-}
-
-/*
- * ###################################################################################################
- *                       P U B L I S H   T O T A L S  
- * ###################################################################################################
-*/
-/*  Eksempel på Topic og Payload for publisering af totals, subtotals og pulseTimeCorrection
- *  Topic: energy/monitor_ESP32_48E72997D320/1/values
- *  Payload:
- *  {
- *    "Subtotal" : 123,
- *    "Total" : 789,
- *    "pulscorr" : 25
- *  }
-*/
-/*  Alternative construction using serializeJson 
-*/
-void publishTotalsJson( u_int8_t PIN_reference) {
-  uint8_t payload[256];
-  JsonDocument doc;
-
-  doc[MQTT_NUMBER_ENERG_ENTITYNAME] = meterData[PIN_reference].pulseTotal;
-  doc[MQTT_SENSOR_ENERG_ENTITYNAME] = meterData[PIN_reference].pulseSubTotal;
-  doc[MQTT_PULSTIME_CORRECTION] = pulseTimeCorrection;
-
-  size_t length = serializeJson(doc, payload);
-  String valueTopic = String( MQTT_PREFIX + mqttDeviceNameWithMac + "/" + PIN_reference + MQTT_SUFFIX_VALUES);
-
-  mqttClient.publish(valueTopic.c_str(), payload, length, RETAINED);
 }
 
 /*
@@ -554,19 +631,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     IRQ_PIN_reference = getIRQ_PIN_reference(topic);
   }
 
-  if( topicString.endsWith(MQTT_SUFFIX_VALUES)) {
-    deserializeJson(doc, payload, length);
-    meterData[IRQ_PIN_reference].pulseTotal += long(doc[MQTT_NUMBER_ENERG_ENTITYNAME]);
-    meterData[IRQ_PIN_reference].pulseSubTotal += long(doc[MQTT_SENSOR_ENERG_ENTITYNAME]);
-    pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
-    bitSet(totalsSetForPin, IRQ_PIN_reference);
-    publishMqttConfigurations( IRQ_PIN_reference);
-  } else
   if ( topicString.endsWith(MQTT_SUFFIX_TOTAL_TRESHOLD)) {
     deserializeJson(doc, payload, length);
-    meterData[IRQ_PIN_reference].pulseTotal = long(float(doc[MQTT_NUMBER_ENERG_ENTITYNAME]) * float(private_default_pulse_per_kWh[IRQ_PIN_reference]));
+    meterData[IRQ_PIN_reference].pulseTotal = long(float(doc[MQTT_NUMBER_ENERG_ENTITYNAME]) * float(interfaceConfig.pulse_per_kWh[IRQ_PIN_reference]));
     long watt_consumption = 0;
-    publishTotalsJson( IRQ_PIN_reference);
     publishSensorJson( watt_consumption, IRQ_PIN_reference);
   } else
   /* Set pulse time correction in milliseconds. Done by:
@@ -575,20 +643,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
    */
   if ( topicString.endsWith(MQTT_SUFFIX_CONFIG)) {
     deserializeJson(doc, payload, length);
-    pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
+    interfaceConfig.pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
+    writeConfigData();
   } else
   /* Publish totals, subtotals to google sheets and reset subtotals. Done by
    * Publish: true
    * To topic: energy/monitor_ESP32_48E72997D320/subtotal_reset
    */
   if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET)) {
-    updateGoogleSheets( false);
-    for ( int ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+    if (PRIVATE_UPDATE_GOOGLE_SHEET)
+      updateGoogleSheets( false);
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
       meterData[ii].pulseSubTotal = 0;
+      writeMeterData( ii);
     }
+    
   } else
-  if ( topicString.endsWith(MQTT_STATUS)) {
-    for (int ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+  if ( topicString.endsWith(MQTT_SUFFIX_STATUS)) {
+    for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
       configurationPublished[ii] = false;
     } 
   }
@@ -657,9 +729,6 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
 
-  
-  initializeGlobals();
-
   // Initialize Interrupt pins
   for ( u_int8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
     pinMode(channelPin[ii], INPUT_PULLUP);
@@ -675,8 +744,64 @@ void setup() {
   attachInterrupt(private_Metr7_GPIO, Ext_INT7_ISR, FALLING);
   attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, FALLING);
 
+  initializeGlobals();
+
   mqttClient.setServer(PRIVATE_MQTT_SERVER.c_str(), PRIVATE_MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
+
+/*
+ * Read configuration and energy meter data from SD memoory
+ */
+  if(!SD.begin(5)){
+    indicateError(0);
+  }
+
+  // Reading configuration 
+  String configFilename = String(CONFIGURATION_FILENAME);
+  File structFile = SD.open(configFilename, FILE_READ);
+  if ( structFile) {
+    structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
+    structFile.close();
+  }
+
+  // Check if new configuration and datafiles are required
+  if ( interfaceConfig.structureVersion != (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS) {
+    setConfigurationDefaults();
+  }
+
+// Reading datafiles.
+  uint16_t numberOfDatafilesRead = 0;
+  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+    String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
+    structFile = SD.open(filename, FILE_READ);
+    if ( structFile) {
+      if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) == sizeof(meterData[ii])/sizeof(uint8_t)) {
+         numberOfDatafilesRead++;
+      } else {
+        meterData[ii].pulseTotal = 0;
+        meterData[ii].pulseSubTotal = 0;
+      }
+      structFile.close();
+    } else {
+      meterData[ii].pulseTotal = 0;
+      meterData[ii].pulseSubTotal = 0;
+    }
+  }
+
+  // IF any datafiles in the current datafileset exists, create new datafileset
+  if (numberOfDatafilesRead > 0)
+    interfaceConfig.dataFileSetNumber++;
+
+  writeConfigData();
+
+  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+    writeMeterData( ii);
+  }
+
+  if (PRIVATE_UPDATE_GOOGLE_SHEET) {
+    bool AddPowerON = true;
+    updateGoogleSheets( AddPowerON);
+  }  
 
   digitalWrite(LED_BUILTIN, LOW);           // Turn OFF LED before entering loop
 }
@@ -693,10 +818,24 @@ void setup() {
 void loop() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>   Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  if (WiFi.status() != WL_CONNECTED and millis() > WiFiConnectAttempt + WiFiConnectPostpone) {
+// Ingore WiFi connect if IRQ's are present.
+  if ( IRQ_PINs_stored == 0 and \
+       WiFi.status() != WL_CONNECTED and millis() > WiFiConnectAttempt + WiFiConnectPostpone) {
 
-    digitalWrite(LED_BUILTIN, HIGH);  // Turn ON the LED to indicate WL connections is lost.
+    /* Turn Build in LED (LED) ON, when not connected to WiFi.
+     * The LED is also used as indicator for interrupt activity (Pules registrered). To combine this
+     * with the LED being ON when no WiFi connected, an interrupt activity will tuggle the LED and after
+     * a short time (BLIP) the LED will be tuggled again. This way the LED will either turn ON or turn off
+     * for a short time, depending on WiFi connection.
+     * SO: In order to turn the led ON when not connectged to WiFi, the LED has to be se ON or Off depending
+     * on status set by the interrupt activity.
+    */
 
+    if (LED_Invertred == false) {
+      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+      LED_Invertred = true;
+    }
+    
     WiFi.disconnect();
     WiFi.mode(WIFI_STA);
     WiFi.begin(PRIVATE_WIFI_SSID.c_str(), PRIVATE_WIFI_PASS.c_str());
@@ -704,8 +843,12 @@ void loop() {
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
       WiFiConnectAttempt = millis();
       WiFiConnectPostpone = WIFI_CONNECT_POSTPONE;
+      blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
     } else {
+      WiFiConnectAttempt = 0;
+      WiFiConnectPostpone = 0;
+
       /*¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤
       *    Arduino basicOTA  impementation
       *¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤
@@ -761,9 +904,12 @@ void loop() {
 // >>>>>>>>>>>>>>>>>>>>>>>>   E N D  Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 // >>>>>>>>>>>>>>>>>>>>    IF  Connected to WiFi -> Connect to MQTT broker    <<<<<<<<<<<<<<<<<<<<<<<<<
-  if (WiFi.status() == WL_CONNECTED) {
-    if ( !LED_Toggled) {
-      digitalWrite(LED_BUILTIN, LOW);  // Turn the LED off to indicate WL is connected
+// Ignore connect to MQTT if IRQ's are present-
+  if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED) {
+
+    if (LED_Invertred == true) {
+      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+      LED_Invertred = false;
     }
 
     ArduinoOTA.handle();
@@ -771,22 +917,18 @@ void loop() {
     // >>>>>>>>>>>>>>>>>>> Connect to MQTT Broker <<<<<<<<<<<<<<<<<<<<<<<<<<
     if (!mqttClient.connected()) {
       String will = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
-      if (mqttClient.connect(mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False") ) {
+
+      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False") and\
+                              millis() > MQTTConnectAttempt + MQTTConnectPostpone ) {
+
+        MQTTConnectAttempt = 0;
+        MQTTConnectPostpone = 0;
+        blip = BLIP;        // Make a short blip (LED Flash) to indicate normal activity.
         esp32Connected = true;
 
         //   >>>>>>>>>>>>>>>>>>>>>   publish will and SKETCH_VERSION   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         if (versionTopic_NOT_Published) // Publish only once at every reboot.
           publish_sketch_version();
-
-        //   >>>>>>>>>>>>>>>>>>>>>>   Update Totals from MQTT  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-        if ( !totalsUpdatedFromMQTT) {
-          totalsUpdatedFromMQTT = true;  // To prevent Meter Totals from getting updated from MQTT more than once at every restart
-
-          updateTotalsFromMQTT();  
-  
-          //   >>>>>>>>>>>>>>>>>>   Update Google sheets and set powerUp  <<<<<<<<<<<<<<<<<<<<<<<<<
-          updateGoogleSheets( true);
-        }
 
         //   >>>>>>>>>>>>>>>>>>>>  Subscribe to Set Totals and Reset Suttotals topic  <<<<<<<<<<<<<<<<<
         String totalSetTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/+" + MQTT_SUFFIX_TOTAL_TRESHOLD);
@@ -798,21 +940,27 @@ void loop() {
         String configSetTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SUFFIX_CONFIG);
         mqttClient.subscribe(configSetTopic.c_str(), 1);
 
-        String statusSetTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_STATUS);
+        String statusSetTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_SUFFIX_STATUS);
         mqttClient.subscribe(statusSetTopic.c_str(), 1);
 
         mqttClient.publish(will.c_str(), (const uint8_t *)"True", 4, RETAINED);
         
-      } else 
+      } else {
+        MQTTConnectAttempt = millis();
+        MQTTConnectPostpone = MQTT_CONNECT_POSTPONE;
+        blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
         esp32Connected = false;
+      }
     }
   }
   // >>>>>>>>>>>>>>>>>>>  E N D IF  Connected to WiFi -> Connect to MQTT broker  <<<<<<<<<<<<<<<<<<<<<<<<<<
 
   // >>> Process incomming messages and maintain connection to the server
   if ( esp32Connected) {
-    if(!mqttClient.loop())
+    if(!mqttClient.loop()) {
+      blip = 4 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
+    }
   }
   //  <<< END Process incomming messages
 
@@ -827,7 +975,7 @@ void loop() {
       LED_toggledAt = millis();
     }
 
-    for( int IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) { // Iterate through all bits in the byte IRQ_PINs_stored.
+    for( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) { // Iterate through all bits in the byte IRQ_PINs_stored.
       /*
         *  If bit in IRQ_PINs_stored matches the bit set in pinMask: Calculate powerconsumption and publist data.
         */
@@ -843,23 +991,23 @@ void loop() {
           * but only saves one comsumption calculation every 50 days...
           */
         long watt_consumption = 0;
-        if ( meterData[IRQ_PIN_index].pulseTimeStamp > 0 && meterData[IRQ_PIN_index].pulseTimeStamp < millsTimeStamp[IRQ_PIN_index]) { 
+        if ( metaData[IRQ_PIN_index].pulseTimeStamp > 0 && metaData[IRQ_PIN_index].pulseTimeStamp < millsTimeStamp[IRQ_PIN_index]) { 
           watt_consumption = round(((float)(60*60*1000) / 
-                                (float)(millsTimeStamp[IRQ_PIN_index] - meterData[IRQ_PIN_index].pulseTimeStamp + pulseTimeCorrection)) 
-                                / (float)meterData[IRQ_PIN_index].pulse_per_kWh * 1000);
+                                (float)(millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
+                                / (float)interfaceConfig.pulse_per_kWh[IRQ_PIN_index] * 1000);
 
-          meterData[IRQ_PIN_index].pulseLength = millsTimeStamp[IRQ_PIN_index] - meterData[IRQ_PIN_index].pulseTimeStamp + pulseTimeCorrection;
+          metaData[IRQ_PIN_index].pulseLength = millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection;
         }
 
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Update meterData and publish totals   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         
         if ( watt_consumption < MAX_COMSUMPTION) {
-          meterData[IRQ_PIN_index].pulseTimeStamp = millsTimeStamp[IRQ_PIN_index];
+          metaData[IRQ_PIN_index].pulseTimeStamp = millsTimeStamp[IRQ_PIN_index];
           meterData[IRQ_PIN_index].pulseTotal++;
           meterData[IRQ_PIN_index].pulseSubTotal++;
           
+          writeMeterData( IRQ_PIN_index);
           if ( esp32Connected) {
-            publishTotalsJson( IRQ_PIN_index);
             publishSensorJson( watt_consumption, IRQ_PIN_index);
           }
         }
@@ -886,32 +1034,31 @@ void loop() {
   while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS) {
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
     // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
-    if ( meterData[GlobalIRQ_PIN_index].pulseLength > 0 && meterData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp) {
-      if (  meterData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * meterData[GlobalIRQ_PIN_index].pulseLength) < timeStamp ) {
+    if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 && metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp) {
+      if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp ) {
         
         long watt_consumption = round(((float)(60*60*1000) / 
-                                  (float)(timeStamp - meterData[GlobalIRQ_PIN_index].pulseTimeStamp + pulseTimeCorrection)) 
-                                  / (float)meterData[GlobalIRQ_PIN_index].pulse_per_kWh * 1000);
+                                  (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
+                                  / (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
 
         if ( watt_consumption < MIN_CONSUMPTION) {
           watt_consumption = 0;
-          meterData[GlobalIRQ_PIN_index].pulseLength = 0;
+          metaData[GlobalIRQ_PIN_index].pulseLength = 0;
         }
         if ( esp32Connected)
           publishSensorJson( -1 * watt_consumption, GlobalIRQ_PIN_index);
 
-        meterData[GlobalIRQ_PIN_index].pulseLength *= 2;
+        metaData[GlobalIRQ_PIN_index].pulseLength *= 2;
       }
     }
-    GlobalIRQ_PIN_index++;
-  }
-  
   /* Tuggle LED Pin if tuggled and BLIP time has passed
   */
-  if ( LED_Toggled and millis() > LED_toggledAt + BLIP) {
-    digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-    LED_Toggled = false;
-    LED_toggledAt = 0;
+    if ( LED_Toggled and millis() > LED_toggledAt + blip) {
+      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+      LED_Toggled = false;
+      LED_toggledAt = 0;
+    }
+
+    GlobalIRQ_PIN_index++;
   }
- 
 }

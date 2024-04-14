@@ -1,5 +1,5 @@
 /*
- * Private configuration file for projekt: "PlatfomIO projext: Esp32 MQTT interface for Carlo Gavazzi energy meter - V1.0.0"
+ * Private configuration file for projekt: "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0"
  * ######################################################################################################################################
  * ######################################################################################################################################
  *                       C  O  N  F  I  G  U  T  A  B  L  E       D  E  F  I  N  I  T  I  O  N  S
@@ -42,15 +42,11 @@ bool PRIVATE_UPDATE_GOOGLE_SHEET = true;   // Set the flag to true if data are t
 const String PRIVATE_GOOGLE_SCRIPT_ID = "1BdQzuTeYr4Tf4zwT-LP1fk63oWZTrQ_cIDfgWfgD";
 
 // Number of energy meters connected. 
-// Be sure to modify the values for the following two variables ( private_default_pulse_per_kWh and  )
+// Be sure to modify the values for next variable (private_default_pulse_per_kWh).
 #define PRIVATE_NO_OF_CHANNELS 8
 
 // Define default number of pulses per kWh for each energy meter.
-int  private_default_pulse_per_kWh[PRIVATE_NO_OF_CHANNELS] = {1000,1000,1000,1000,1000,100,100,100};
-
-// Define array of GPIO pin numbers used for IRQ.
-const int private_channelPin[PRIVATE_NO_OF_CHANNELS] = {private_Metr1_GPIO, private_Metr2_GPIO, private_Metr3_GPIO, private_Metr4_GPIO,
-                                                        private_Metr5_GPIO, private_Metr6_GPIO, private_Metr7_GPIO, private_Metr8_GPIO};  
+uint16_t private_default_pulse_per_kWh[PRIVATE_NO_OF_CHANNELS] = {1000,1000,1000,1000,1000,100,100,100};
 
 char * private_energyMeters[] = {
            (char*) "Name precented in Home Assistant for energy meter connected to Metr1_GPIO",
