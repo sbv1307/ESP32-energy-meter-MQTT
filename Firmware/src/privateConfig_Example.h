@@ -1,5 +1,5 @@
 /*
- * Private configuration file for projekt: "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.1"
+ * Private configuration file for projekt: "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.2"
  * ######################################################################################################################################
  * ######################################################################################################################################
  *                       C  O  N  F  I  G  U  T  A  B  L  E       D  E  F  I  N  I  T  I  O  N  S

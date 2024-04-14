@@ -43,7 +43,7 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.1"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.2"
 
 /* Version history:
  *  1.0.0   Initial production version.
@@ -51,6 +51,7 @@
  *          Struct data_t re-defined and split up to config_t, meta_t and data_t for optimal file read / write funktionality.
  *          Publishing totals, Subtotals and pulscorrections to MQTT has been replaced be write to SD Memory card.
  *  2.0.1   MQTT Reconnect bugfix
+ *  2.0.2   serial removed as it is not needed.
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -723,8 +724,6 @@ void IRAM_ATTR Ext_INT8_ISR() {
  * ###################################################################################################
  */
 void setup() {
-  Serial.begin(115200);
-
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
 
@@ -874,14 +873,15 @@ void loop() {
             type = "filesystem";
 
           // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-          Serial.println("Start updating " + type);
+          //  Serial.println("Start updating " + type);                                                      ############################################
         })
         .onEnd([]() {
-          Serial.println("\nEnd");
+          // Serial.println("\nEnd");                                                                         ############################################
         })
         .onProgress([](unsigned int progress, unsigned int total) {
-          Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        })
+          // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));                                  ############################################
+        });
+        /*
         .onError([](ota_error_t error) {
           Serial.printf("Error[%u]: ", error);
           if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
@@ -890,6 +890,7 @@ void loop() {
           else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
           else if (error == OTA_END_ERROR) Serial.println("End Failed");
         });
+        */
 
       ArduinoOTA.begin();
 
