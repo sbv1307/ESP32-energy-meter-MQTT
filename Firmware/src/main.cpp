@@ -9,6 +9,7 @@
 #include <privateConfig.h>
 #include "SD.h"
 #include "SPI.h"
+#include "time.h"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -43,7 +44,7 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.2"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.0.0"
 
 /* Version history:
  *  1.0.0   Initial production version.
@@ -52,6 +53,7 @@
  *          Publishing totals, Subtotals and pulscorrections to MQTT has been replaced be write to SD Memory card.
  *  2.0.1   MQTT Reconnect bugfix
  *  2.0.2   serial removed as it is not needed.
+ *  3.0.0   Publish data to Google Sheets based on epoch time and time collected from a time server
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -91,7 +93,6 @@
  *  - Finetune MQTT_MAX_PACKET_SIZE in platformio.ini. Definition: MQTT_MAX_PACKET_SIZE < MQTT_MAX_HEADER_SIZE + 2 + strlen(topic) + payload length
  *    where MQTT_MAX_HEADER_SIZE is defined as 5.
  *  - Reduce boot time to reduce loss of Energy meter pulses. Might require use of SdFat library  instead of SD library.
- *  - Imnplement get time from NTP Server to reset subTotals (See: https://randomnerdtutorials.com/esp32-microsd-card-arduino/)
  *  - Imlement ESP.restart() if required. Consider to implement EEPROM.write() https://randomnerdtutorials.com/esp32-flash-memory/
  *    during call to ESP.resart(). Writes for every update will kill flash memory. 
  */
@@ -171,6 +172,13 @@ const String DATAFILESET_POSTFIX    = "/dfs-";          // Will bee the leading 
 const String FILENAME_POSTFIX       = "_df-";           // Leading '_' simulate the '/' in a filesystem representation. 
 const String FILENAME_SUFFIX        = ".dat";           //
 
+/*
+ * Time server configuration
+ */
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 3600;
 
 String mqttDeviceNameWithMac;
 String mqttClientWithMac;
@@ -187,6 +195,7 @@ bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing t
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
 bool LED_Toggled = false; 
 bool LED_Invertred = false;
+bool gsheetUpdated = false;
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -220,6 +229,10 @@ unsigned long MQTTConnectAttempt = 0;   // Timestamp when an attempt to connect 
 
 unsigned long WiFiConnectPostpone = 0;  // Millisecunds between each attempt to connect to WiFi.
 unsigned long MQTTConnectPostpone = 0;  // Millisecunds between each attempt to connect to MQTT.
+
+unsigned long timeLastCheckedAt;        // Timestamp for when epoch time was checked.
+unsigned long millisToNextTimeCheck;    // Number of millis to next epoch time check.
+
 
 unsigned long LED_toggledAt = 0;        // Timestamp when an IRQ tuggels the LED
 
@@ -445,6 +458,75 @@ void updateGoogleSheets( boolean powerOn) {
     //---------------------------------------------------------------------
     http.end();
   }
+}
+
+/* ###################################################################################################
+ *          G E T   M I L L I S   T O   N E X T    T I M E   C H E C K
+ * ###################################################################################################
+
+/*
+ * Then function is used to schedule a piece of program code at a time defined by the two definitions:
+ * #define SCHEDULE_MINUTE  mm
+ * #define SCHEDULE_HOUR  hh
+ * 
+ * getMillisToNextTimeCheck() will return the number om millis() diveded by two, counted from the time 
+ * it is called to the time defined.
+ * Doing it this way reduce the number of calls to the timeserver.
+ * 
+ * getMillisToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
+ * 
+ * Usage:
+ * #include "time.h"
+ * 
+ * #define SCHEDULE_MINUTE  mm
+ * #define SCHEDULE_HOUR  hh
+ * 
+ * const char* ntpServer = "pool.ntp.org";
+ * const long  gmtOffset_sec = 3600;
+ * const int   daylightOffset_sec = 3600;
+ * 
+ * 
+ * setup() {
+ *   timeLastCheckedAt = millis();
+ *   millisToNextTimeCheck = getMillisToNextTimeCheck();
+ * }
+ * 
+ * loop() {
+ *  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
+ *    timeLastCheckedAt = millis();
+ *    millisToNextTimeCheck = getMillisToNextTimeCheck();
+ *  }
+ *  if ( millisToNextTimeCheck == 0 ) {
+ *    millisToNextTimeCheck = 60000  // Snooze one minute to avoid calls within the same minute
+ *     
+ *     * Code to be executred
+ *      
+ *   }
+ * 
+ */
+unsigned long getMillisToNextTimeCheck() {
+  unsigned long timeToNextTimecheckInSeconcs;
+  struct tm timeinfo;
+  long dogn = 0;
+  int sc_min = SCHEDULE_MINUTE;
+  int sc_hour = SCHEDULE_HOUR;
+
+  if(!getLocalTime(&timeinfo)){
+    return -1;
+  }
+
+  if ( timeinfo.tm_hour == sc_hour and timeinfo.tm_min == sc_min) {
+    timeToNextTimecheckInSeconcs = 0;
+  } else {
+    if (((sc_hour * 60 * 60) + (sc_min * 60)) < ((timeinfo.tm_hour * 60 * 60) + (timeinfo.tm_min * 60) + timeinfo.tm_sec)) {
+      dogn = 24 * 60 * 60;
+    }
+    timeToNextTimecheckInSeconcs = ((((sc_hour * 60 * 60) + (sc_min * 60) + dogn) - ((timeinfo.tm_hour * 60 * 60) +\
+                                   (timeinfo.tm_min * 60) + timeinfo.tm_sec)) /
+                                   2) *1000 + 30000;
+  }
+
+  return timeToNextTimecheckInSeconcs;
 }
 
 /*
@@ -796,11 +878,6 @@ void setup() {
     writeMeterData( ii);
   }
 
-  if (PRIVATE_UPDATE_GOOGLE_SHEET) {
-    bool AddPowerON = true;
-    updateGoogleSheets( AddPowerON);
-  }  
-
   digitalWrite(LED_BUILTIN, LOW);           // Turn OFF LED before entering loop
 }
 
@@ -844,8 +921,19 @@ void loop() {
       blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
     } else {
-      WiFiConnectAttempt = 0;
+      WiFiConnectAttempt = 0;   // In case WiFi is lost, attempt to reconnect immediatly. 
       WiFiConnectPostpone = 0;
+
+      // Init epoch time
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+      millisToNextTimeCheck = getMillisToNextTimeCheck();
+      timeLastCheckedAt = millis();
+      if (PRIVATE_UPDATE_GOOGLE_SHEET and !gsheetUpdated) {
+        bool AddPowerON = true;
+        gsheetUpdated = true;
+        updateGoogleSheets( AddPowerON);
+      }  
 
       /*¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤
       *    Arduino basicOTA  impementation
@@ -1058,5 +1146,22 @@ void loop() {
     }
 
     GlobalIRQ_PIN_index++;
+  }
+
+  /* >>>>>>>>>>>>>>>>>>>>>>>>>>> time check to schecule <<<<<<<<<<<<<<<<<<< */
+  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
+    timeLastCheckedAt = millis();
+    millisToNextTimeCheck = getMillisToNextTimeCheck();
+  }
+
+  if ( millisToNextTimeCheck == 0) {
+    millisToNextTimeCheck = 60000; // Postpone a minute to get next millisToNextTimeCheck
+
+    if (PRIVATE_UPDATE_GOOGLE_SHEET and WiFi.status() == WL_CONNECTED)
+      updateGoogleSheets( false);
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+      meterData[ii].pulseSubTotal = 0;
+      writeMeterData( ii);
+    }
   }
 }

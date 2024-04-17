@@ -41,6 +41,12 @@ const uint16_t PRIVATE_MQTT_PORT    = 1883;     // mqtt port (default is 1883)
 bool PRIVATE_UPDATE_GOOGLE_SHEET = true;   // Set the flag to true if data are to be added to Google sheets
 const String PRIVATE_GOOGLE_SCRIPT_ID = "1BdQzuTeYr4Tf4zwT-LP1fk63oWZTrQ_cIDfgWfgD";
 
+/*
+ * Define when Google sheets are to be updated
+ */
+#define SCHEDULE_MINUTE  0
+#define SCHEDULE_HOUR  0
+
 // Number of energy meters connected. 
 // Be sure to modify the values for next variable (private_default_pulse_per_kWh).
 #define PRIVATE_NO_OF_CHANNELS 8
