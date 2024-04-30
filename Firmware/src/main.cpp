@@ -44,7 +44,7 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.0.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.0.1"
 
 /* Version history:
  *  1.0.0   Initial production version.
@@ -54,6 +54,7 @@
  *  2.0.1   MQTT Reconnect bugfix
  *  2.0.2   serial removed as it is not needed.
  *  3.0.0   Publish data to Google Sheets based on epoch time and time collected from a time server
+ *  3.0.1   BUGFIX: Interrupt ISR were attached to a non configured pin, which could cause an un-handled IRQ, which then cause infinite loop.
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -815,14 +816,24 @@ void setup() {
   }
 
   // arm interrupt. Create a functioncall for each interrupt pin
-  attachInterrupt(private_Metr1_GPIO, Ext_INT1_ISR, FALLING);
-  attachInterrupt(private_Metr2_GPIO, Ext_INT2_ISR, FALLING);
-  attachInterrupt(private_Metr3_GPIO, Ext_INT3_ISR, FALLING);
-  attachInterrupt(private_Metr4_GPIO, Ext_INT4_ISR, FALLING);
-  attachInterrupt(private_Metr5_GPIO, Ext_INT5_ISR, FALLING);
-  attachInterrupt(private_Metr6_GPIO, Ext_INT6_ISR, FALLING);
-  attachInterrupt(private_Metr7_GPIO, Ext_INT7_ISR, FALLING);
-  attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 1)
+    attachInterrupt(private_Metr1_GPIO, Ext_INT1_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 2)
+    attachInterrupt(private_Metr2_GPIO, Ext_INT2_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 3)
+    attachInterrupt(private_Metr3_GPIO, Ext_INT3_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 4)
+    attachInterrupt(private_Metr4_GPIO, Ext_INT4_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 5)
+    attachInterrupt(private_Metr5_GPIO, Ext_INT5_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 6)
+    attachInterrupt(private_Metr6_GPIO, Ext_INT6_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 7)
+    attachInterrupt(private_Metr7_GPIO, Ext_INT7_ISR, FALLING);
+  if ( PRIVATE_NO_OF_CHANNELS >= 8)
+    attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, FALLING);
+
+
 
   initializeGlobals();
 
