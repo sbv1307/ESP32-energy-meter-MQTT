@@ -37,14 +37,20 @@
  *  }
  * to topic: energy/monitor_ESP32_48E72997D320/<Energy meter number***>/threshold
  * 
- * ** pulse-counts in the number of pulses counted by the energy meter. It is calculated by the kWh,
+ * LED indications:
+ * 
+ * 
+ * )** pulse-counts in the number of pulses counted by the energy meter. It is calculated by the kWh,
  * shown on the energy meter multiplied be the number of pulses per kWh for the energy meter. 
  *  Pulses per kWh can be found in the documentation for the energy meter.
- * *** ‘Energy meter number’ is a number 0..7 for the channel, on which the energy meter is connected.
+ * )*** ‘Energy meter number’ is a number 0..7 for the channel, on which the energy meter is connected.
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.0.1"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.1.0"
+
+// #define DEBUG true
+// #define SD_DEBUG true
 
 /* Version history:
  *  1.0.0   Initial production version.
@@ -55,6 +61,12 @@
  *  2.0.2   serial removed as it is not needed.
  *  3.0.0   Publish data to Google Sheets based on epoch time and time collected from a time server
  *  3.0.1   BUGFIX: Interrupt ISR were attached to a non configured pin, which could cause an un-handled IRQ, which then cause infinite loop.
+ *  3.1.0   Adding DEBUG compilor switch to investigate SD issue.
+ *          -  Code re-arranged to comply with VS Code standard.
+ *          -  Need to re-think the Idea for not using directories. The SD library uses short 8.3 names for files. This might be an issue.
+ *             Data file sets now placed in directories.
+ *          -  Startup delay for 10 sec. introduced, before accessinmg the SD Card. This is to prevent SD Card issues while connecting the device to power.
+ *             While onnecting the device to power will in moast cases cause multible power failures (dis-connections), before the power is stable.
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -105,7 +117,7 @@
  * ######################################################################################################################################
  * ######################################################################################################################################
  */
-#define CONFIGURATON_VERSION 2
+#define CONFIGURATON_VERSION 4
 /* WiFi and MQTT connect attempt issues. 
  * IRQ's will be registrated, but the counters for will not be updated during the calls to WiFi and MQTT connect. If more than one pulse
  * from then same meter arrives, it will be lost if these calls takes up too much time. Setting a long connect postpone will reduce the loss
@@ -157,20 +169,18 @@ const String  MQTT_POWER_DEVICECLASS        = "power";
 
 /*
  * File configurations
- * All files will be placed in the root of the SD Card. File System FS.h will not be implemented.
- * There will be one configuration file and a data file for each energy meter connected (defined in privateConfig.h). 
+ * There will be one configuration file and a data file for each energy meter connected (Number of energy meters is defined in privateConfig.h).
  * As writes to data files will occour on every pulse registered, writes to the SD Card will be intensive.
- * To prevent SD Card failures, a new set of datafiles will be used at every reboot or for every 65.500** pulses counted.
- * Filenames will be created like "data file set name"_"datafile name" where '_' simulate the '/'
- * in a filesystem representation (E.g: /dfs-1_df-1). 
- * Data file sets will have an ending number 0 - 2^16 (65536 the max for a uint16_t)
- * Data files will have an ending number 0 - (MAX_NO_OF_CHANNELS - 1). 
+ * To prevent SD Card failures, a new set of datafiles will be created at every reboot or for every 65.500** pulses counted.
+ * Each data file set will be created in a directory, which will have an ending number 0 - 2^16 (65536 the max for a uint16_t)
+ * Data files will have an ending number 0 - (MAX_NO_OF_CHANNELS - 1).
  * 
  * ** 65.500 pulses will be equal tp 65,50kWh registered on a Carlo Gavazzi type EM111 energy meter.
-*/
+ * 
+ */
 const String CONFIGURATION_FILENAME = "/config.cfg ";   // Filenames has to start with '/'
-const String DATAFILESET_POSTFIX    = "/dfs-";          // Will bee the leading part ("postfix") of the datafile name and act as a kined of directory name
-const String FILENAME_POSTFIX       = "_df-";           // Leading '_' simulate the '/' in a filesystem representation. 
+const String DATAFILESET_POSTFIX    = "/fs-";           // Will bee the directory name
+const String FILENAME_POSTFIX       = "/df-";           // Leading '/'. 
 const String FILENAME_SUFFIX        = ".dat";           //
 
 /*
@@ -204,7 +214,7 @@ PubSubClient mqttClient(wifiClient);
 // Define structure for configuration
 struct config_t
   {
-    uint8_t structureVersion;
+    int structureVersion;
     unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
     uint16_t dataFileSetNumber;               // In which data file set ("directory") the data files will be located.
     uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
@@ -240,573 +250,68 @@ unsigned long LED_toggledAt = 0;        // Timestamp when an IRQ tuggels the LED
 volatile unsigned long millsTimeStamp[PRIVATE_NO_OF_CHANNELS];  // Used by the ISR to store exactly when an interrupt occoured. 
                                                                 // Used to calculate consuption.
 volatile uint8_t  IRQ_PINs_stored = 0b00000000;   // Used by the ISR to register which energy meter caused an interrupt.
+/*
+ * ##################################################################################################
+ * ##################################################################################################
+ * ##################################################################################################
+ * ##########################   f u n c t i o n    d e c l a r a t i o n s  #########################
+ * ##################################################################################################
+ * ##################################################################################################
+ * ##################################################################################################
+ */
+void indicateError( uint8_t);
+void writeConfigData();
+void writeMeterDataFile( uint8_t);
+void writeMeterData(uint8_t);
+void setConfigurationDefaults();
+void initializeGlobals();
+void publish_sketch_version();
+void publishStatusMessage(String);
+byte getIRQ_PIN_reference(char*);
+void updateGoogleSheets( boolean);
+unsigned long getMillisToNextTimeCheck();
+void publishMqttEnergyConfigJson( String, String, String, String, u_int8_t);
+void publishMqttConfigurations( uint8_t);
+void publishSensorJson( long, uint8_t);
+void mqttCallback(char*, byte*, unsigned int);
+void IRAM_ATTR store_IRQ_PIN(u_int8_t);
+void IRAM_ATTR Ext_INT1_ISR();
+void IRAM_ATTR Ext_INT2_ISR();
+void IRAM_ATTR Ext_INT3_ISR();
+void IRAM_ATTR Ext_INT4_ISR();
+void IRAM_ATTR Ext_INT5_ISR();
+void IRAM_ATTR Ext_INT6_ISR();
+void IRAM_ATTR Ext_INT7_ISR();
+void IRAM_ATTR Ext_INT8_ISR();
 
+                                                                                                      #ifdef DEBUG
+                                                                                                        void breakpoint();
+                                                                                                        void printDirectory( File, int);
+                                                                                                      #endif
 /*
  * ###################################################################################################
  * ###################################################################################################
  * ###################################################################################################
- *                       F  U  N  C  T  I  O  N      D  E  F  I  N  I  T  I  O  N  S
- * ###################################################################################################
- * ###################################################################################################
- * ###################################################################################################
-*/
-
-/*
- * Flashing LED to indicate an error
- * 
- */
-void indicateError( uint8_t delayExtends) {
-  
-
-  while (true) {
-    digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-    for ( uint8_t ii = 0; ii > delayExtends; ii++)
-      delay( 4 * BLIP);
-  }
-}
-
-/* ###################################################################################################
- *               W R I T E   C O N F I G   D A T A
- * ###################################################################################################
- */
-void writeConfigData() {
-  String configFilename = String(CONFIGURATION_FILENAME);
-  File structFile = SD.open(configFilename, FILE_WRITE);
-  if (!structFile)
-    indicateError(1);
-  structFile.seek(0);
-  structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig));
-  structFile.close();
-}
-
-/* ###################################################################################################
- *               W R I T E   M E T E R   D A T A
- * ###################################################################################################
- */
-void writeMeterDataFile( uint8_t datafileNumber) {
-  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
-  File structFile = SD.open(filename, FILE_WRITE);
-  if (!structFile)
-    indicateError(2);
-  structFile.seek(0);
-  structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber]));
-  structFile.close(); 
-}
-
-void writeMeterData(uint8_t datafileNumber) {
-  if ( numberOfWrites++ >  NUMBER_OF_WRITES) {
-    interfaceConfig.dataFileSetNumber++;
-    writeConfigData();
-    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
-      writeMeterDataFile(ii);
-  } else
-    writeMeterDataFile(datafileNumber);
-
-
-}
-
-/* ###################################################################################################
- *               S E T    C O N F I G U R A T I O N    D E F A U L T S
- * ###################################################################################################
- * This function is called when:
- * - a new SD Card is present
- * - Changes has been done to the 'config_t' structure
- * - when the number of channels (PRIVATE_NO_OF_CHANNELS) has been changed.
- * The function will delite the old configuration file and create a new one.
- * It will skip all existing data file sets.
- * - uint8_t structureVersion;
- * - unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
- * - uint16_t dataFileSetNumber;                  // In which data file set ("directory") the data files will be located.
- * - uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
- */
-
-void setConfigurationDefaults() {
-  interfaceConfig.structureVersion = (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS;
-  interfaceConfig.pulseTimeCorrection = 0;  // Used to calibrate the calculated consumption.
-
-  // Find new data file set for data files == Skip all existing data files.
-  uint8_t numberOfFilesExists = PRIVATE_NO_OF_CHANNELS;
-  for ( uint16_t filesetNumber = 0; numberOfFilesExists == PRIVATE_NO_OF_CHANNELS; filesetNumber++) {
-    interfaceConfig.dataFileSetNumber = filesetNumber;
-    numberOfFilesExists = 0;
-    for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++) {
-      String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
-      if (SD.exists(dataFileName))
-        numberOfFilesExists++;
-    }
-  }
-  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
-    interfaceConfig.pulse_per_kWh[ii] = private_default_pulse_per_kWh[ii];    // Number of pulses as defined for each energy meter
-
-  String filename = String(CONFIGURATION_FILENAME);
-  if (SD.exists(filename)) {
-    SD.remove(filename);
-  }
-  writeConfigData();
-}
-
-/* ###################################################################################################
- *                     I N I T I A L I Z E   G L O B A L S
- * ###################################################################################################
- */
-void initializeGlobals() {
-  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
-    metaData[ii].pulseTimeStamp = 0;
-    metaData[ii].pulseLength = 0;
-
-    // >>>>>>>>>>    Set flag for publishing HA configuration   <<<<<<<<<<<<< 
-    configurationPublished[ii] = false;
-  }
-
-  // >>>>>>>>>>>>>   Set globals for MQTT Device and Client   <<<<<<<<<<<<<<<<<<
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-
-  char macStr[13] = {0};
-  sprintf(macStr, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-  mqttDeviceNameWithMac = String(MQTT_DEVICE_NAME + macStr);
-  mqttClientWithMac = String(MQTT_CLIENT + macStr);
-}
-
-/* ###################################################################################################
- *                  P U B L I S H   S K E T C H   V E R S I O N
- * ###################################################################################################
- *  As the sketch will esecute in silence, one way to se which version of the SW is running will be
- *  to subscribe to topic defined as (MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SKTECH_VERSION)
- *  on the MQTT broker, configured in the privateConfig.h file.
- *  This will return the value of (SKETCH_VERSION)
- */
-void publish_sketch_version() {  // Publish only once at every reboot.
-  IPAddress ip = WiFi.localIP();
-  String versionTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SKTECH_VERSION);
-  String versionMessage = String(SKETCH_VERSION + String("\nConnected to SSID: \'") +\
-                                  String(PRIVATE_WIFI_SSID) + String("\' at: ") +\
-                                  String(ip[0]) + String(".") +\
-                                  String(ip[1]) + String(".") +\
-                                  String(ip[2]) + String(".") +\
-                                  String(ip[3]));
-
-  mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
-}
-
-/* ###################################################################################################
- *                  P U B L I S H   S T A T U S M E S S A G E
- * ###################################################################################################
- *  Send status messages to MQTT
- * 
-*/
-void publishStatuMessage(String statusMessage) {  // Publish only once at every reboot.
-  String statusTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + MQTT_SUFFIX_STATUS);
-  mqttClient.publish(statusTopic.c_str(), statusMessage.c_str(), RETAINED);
-}
-
-/* ###################################################################################################
- *      G E T   I R Q  P I N   r e f e r e n c e  f r o m   t o p i c   s t r i n g
- * ###################################################################################################
- * 
- * IRQ pin reference is expected to be les than 2 digits!
- */
-byte getIRQ_PIN_reference(char* topic) {
-  uint16_t startIndex = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/").length();
-  uint16_t i = 0;
-  uint8_t result = 0;
-  while(topic[startIndex + i] != '/' && i < 2) {  // IRQ pin reference les than 2 digits!
-    result = result * 10 + (topic[startIndex+i]-'0');
-    i++;
-  }
-  return result;
-}
-
-/* ###################################################################################################
- *                         U P D A T E     G O O G L E     S H E E T S
- * ###################################################################################################
- * Ideas taken from:
- * https://iotdesignpro.com/articles/esp32-data-logging-to-google-sheets-with-google-scripts
- *  
- */
-void updateGoogleSheets( boolean powerOn) {
-  // >>>>>>>>>>>>>   Create data-URL string for HTTP request   <<<<<<<<<<<<<<<<<<
-  String urlData = "/exec?meterData=";
-
-  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
-    urlData += String( float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2) + ",";
-  
-  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) {
-    urlData += String( float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2);
-    if ( IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS - 1)
-      urlData += String(",");
-  }
-
-  if ( powerOn == true)
-    urlData += String(",PowerUp");
-
-  // >>>>>>>>>>>>>   Create URL for HTTP request   <<<<<<<<<<<<<<<<<<
-  String urlFinal = "https://script.google.com/macros/s/" + PRIVATE_GOOGLE_SCRIPT_ID + urlData;
-
-  // >>>>>>>>>>>>>   Make HTTP request to google sheet  <<<<<<<<<<<<<<<<<<
-  if ( PRIVATE_UPDATE_GOOGLE_SHEET) {
-    HTTPClient http;
-    http.begin(urlFinal.c_str());
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-
-    // >>>>>>>>>>>>>   getting response from google sheet  <<<<<<<<<<<<<<<<<<
-    if (int httpCode = http.GET()) {
-      String httpMessage = http.getString();
-      String statusMessage = String( String("HTTP Status Code: ") + httpCode + "HTTP Message: " + httpMessage);
-      publishStatuMessage( statusMessage);
-    }
-    //---------------------------------------------------------------------
-    http.end();
-  }
-}
-
-/* ###################################################################################################
- *          G E T   M I L L I S   T O   N E X T    T I M E   C H E C K
- * ###################################################################################################
-
-/*
- * Then function is used to schedule a piece of program code at a time defined by the two definitions:
- * #define SCHEDULE_MINUTE  mm
- * #define SCHEDULE_HOUR  hh
- * 
- * getMillisToNextTimeCheck() will return the number om millis() diveded by two, counted from the time 
- * it is called to the time defined.
- * Doing it this way reduce the number of calls to the timeserver.
- * 
- * getMillisToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
- * 
- * Usage:
- * #include "time.h"
- * 
- * #define SCHEDULE_MINUTE  mm
- * #define SCHEDULE_HOUR  hh
- * 
- * const char* ntpServer = "pool.ntp.org";
- * const long  gmtOffset_sec = 3600;
- * const int   daylightOffset_sec = 3600;
- * 
- * 
- * setup() {
- *   timeLastCheckedAt = millis();
- *   millisToNextTimeCheck = getMillisToNextTimeCheck();
- * }
- * 
- * loop() {
- *  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
- *    timeLastCheckedAt = millis();
- *    millisToNextTimeCheck = getMillisToNextTimeCheck();
- *  }
- *  if ( millisToNextTimeCheck == 0 ) {
- *    millisToNextTimeCheck = 60000  // Snooze one minute to avoid calls within the same minute
- *     
- *     * Code to be executred
- *      
- *   }
- * 
- */
-unsigned long getMillisToNextTimeCheck() {
-  unsigned long timeToNextTimecheckInSeconcs;
-  struct tm timeinfo;
-  long dogn = 0;
-  int sc_min = SCHEDULE_MINUTE;
-  int sc_hour = SCHEDULE_HOUR;
-
-  if(!getLocalTime(&timeinfo)){
-    return -1;
-  }
-
-  if ( timeinfo.tm_hour == sc_hour and timeinfo.tm_min == sc_min) {
-    timeToNextTimecheckInSeconcs = 0;
-  } else {
-    if (((sc_hour * 60 * 60) + (sc_min * 60)) < ((timeinfo.tm_hour * 60 * 60) + (timeinfo.tm_min * 60) + timeinfo.tm_sec)) {
-      dogn = 24 * 60 * 60;
-    }
-    timeToNextTimecheckInSeconcs = ((((sc_hour * 60 * 60) + (sc_min * 60) + dogn) - ((timeinfo.tm_hour * 60 * 60) +\
-                                   (timeinfo.tm_min * 60) + timeinfo.tm_sec)) /
-                                   2) *1000 + 30000;
-  }
-
-  return timeToNextTimecheckInSeconcs;
-}
-
-/*
- * ###################################################################################################
- *              P U B L I S H   M Q T T   E N E R G Y   C O N F I G U R A T I O N
- * ###################################################################################################
- * 
- * component can take the values: "sensor" or "number"
- * device_class can take the values "energy" or "power"
-*/
-/*  Eksempel på Topic og Payload for MQTT sensor integration, deviceClass = "energy":
- *  Where : Component = MQTT_SENSOR_COMPONENT and PIN_reference = 0
- *
- *  energyTopic: homeassistant/sensor/energy/meter_0/config
- *  energyMessage:
- *  {
- *    "name": "Subtotal",
- *    "state_topic": "homeassistant/energy/meter_0/state",
- *    "device_class": "energy",
- *    "unit_of_measurement": "kWh",
- *    "unique_id": "Subtotal_meter_0",
- *    "value_template": "{{ value_json.Subtotal}}",
- *    "device":{
- *      "identifiers":[
- *        "meter_0"
- *      ],
- *      "name": "Energi - Varmepumpe SMO 40 E1"
- *    }
- *  }
- */
-/*  Eksempel på Topic og Payload for MQTT sensor integration, deviceClass = "power":
- *  Where : Component = MQTT_SENSOR_COMPONENT and PIN_reference = 0
- *
- *  energyTopic: homeassistant/sensor/energy/meter_0/config
- *  energyMessage:
- *  {
- *    "name": "Forbrug",
- *    "state_topic": "homeassistant/energy/meter_0/state",
- *    "device_class": "power",
- *    "unit_of_measurement": "W",
- *    "unique_id": "Forbrug_meter_0",
- *    "value_template": "{{ value_json.Forbrug}}",
- *    "device":{
- *      "identifiers":[
- *        "meter_0"
- *      ],
- *      "name": "Energi - Varmepumpe SMO 40 E1"
- *     }
- *  }
- */
-/*  Eksempel på Topic og Payload for MQTT Numner integration, deviceClass = "energy":
- *  Where : Component = MQTT_NUMBER_COMPONENT and PIN_reference = 0
- *
- *  energyTopic: homeassistant/number/energy/meter_0/config
- *  energyMessage:
- *  {
- *    "command_topic" : "energy/monitor_ESP32_48E72997D320/threshold",
- *    "command_template" : {"Total": {{ value }} },
- *    "max" : "99999.99",
- *    "min" : "0.0",
- *    "name": "Total",
- *    "state_topic": "homeassistant/energy/meter_0/state",
- *    "device_class": "energy",
- *    "unit_of_measurement": "kWh",
- *    "unique_id": "Total_meter_0",
- *    "value_template": "{{ value_json.Total}}",
- *    "device":{
- *      "identifiers":[
- *        "meter_0"
- *      ],
- *      "name": "Energi - Varmepumpe SMO 40 E1"
- *    }
- *  }
- * 
- */
-/*  Eksempel på Topic og Payload for opdatering af state (Værdier)
-Topic_ homeassistant/energy/meter_0/state
-Payload:
-{
-	"Subtotal" : "123",
-  "Forbrug" : "456",
-  "Total" : "789"
-}
- */
-void publishMqttEnergyConfigJson( String component, String entityName, String unitOfMesurement, String deviceClass, u_int8_t PIN_reference) {
-  uint8_t payload[1024];
-  JsonDocument doc;
-  String energyMeter = String( private_energyMeters[PIN_reference]);
-
-  if ( component == MQTT_NUMBER_COMPONENT & deviceClass == MQTT_ENERGY_DEVICECLASS) {
-    doc["command_topic"] = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + PIN_reference + MQTT_SUFFIX_TOTAL_TRESHOLD);
-    doc["command_template"] = String("{\"" + entityName + "\": {{ value }} }");
-    doc["max"] = 99999.99;
-    doc["min"] = 0.0;
-    doc["step"] = 0.01;
-  }
-  doc["name"] = entityName;
-  doc["state_topic"] = String(MQTT_DISCOVERY_PREFIX + MQTT_PREFIX + MQTT_PREFIX_DEVICE + PIN_reference + MQTT_SUFFIX_STATE);
-  doc["availability_topic"] = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
-  doc["payload_available"] = "True";
-  doc["payload_not_available"] = "False";
-  doc["device_class"] = deviceClass;
-  doc["unit_of_measurement"] = unitOfMesurement;
-  doc["unique_id"] = String(entityName + "_" + MQTT_PREFIX_DEVICE + PIN_reference);
-  doc["qos"] = 0;
-
-  if ( component == MQTT_SENSOR_COMPONENT & deviceClass == MQTT_POWER_DEVICECLASS)
-    doc["value_template"] = String("{{ value_json." + entityName + "}}");
-  else 
-    doc["value_template"] = String("{{ value_json." + entityName + " | round(2)}}");
-
-  JsonObject device = doc["device"].to<JsonObject>();
-
-  device["identifiers"][0] = String(MQTT_PREFIX_DEVICE + PIN_reference);
-  device["name"] = String("Energi - " + energyMeter);
-
-  size_t length = serializeJson(doc, payload);
-  String energyTopic = String( MQTT_DISCOVERY_PREFIX + component + "/" + deviceClass + "/" + MQTT_PREFIX_DEVICE + PIN_reference + "/config");
-
-  mqttClient.publish(energyTopic.c_str(), payload, length, UNRETAINED);
-}
-
-/*
- * ###################################################################################################
- *                       P U B L I S H   M Q T T   C O N F I G U R A T I O N S  
- * ###################################################################################################
-*/
-void publishMqttConfigurations( uint8_t device) {
-
-  publishMqttEnergyConfigJson(MQTT_SENSOR_COMPONENT, MQTT_SENSOR_ENERG_ENTITYNAME, "kWh", MQTT_ENERGY_DEVICECLASS, device);
-  publishMqttEnergyConfigJson(MQTT_SENSOR_COMPONENT, MQTT_SENSOR_POWER_ENTITYNAME, "W", MQTT_POWER_DEVICECLASS, device);
-  publishMqttEnergyConfigJson(MQTT_NUMBER_COMPONENT, MQTT_NUMBER_ENERG_ENTITYNAME, "kWh", MQTT_ENERGY_DEVICECLASS, device);
-
-  configurationPublished[device] = true;
-}
-
-/*
- * ###################################################################################################
- *                       P U B L I S H   S E N S O R   J S O N
- * ###################################################################################################
-*/
-/*  Eksempel på Topic og Payload for opdatering af state (Værdier)
-Topic_ homeassistant/energy/meter_0/state
-Payload:
-{
-	"Subtotal" : "123",
-  "Forbrug" : "456",
-  "Total" : "789"
-} 
-*/
-void publishSensorJson( long powerConsumption, uint8_t IRQ_PIN_index) {
-  uint8_t payload[256];
-  JsonDocument doc;
-
-  doc[MQTT_SENSOR_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
-  doc[MQTT_SENSOR_POWER_ENTITYNAME] = powerConsumption;
-  doc[MQTT_NUMBER_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
-
-  size_t length = serializeJson(doc, payload);
-  String sensorTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_PREFIX + MQTT_PREFIX_DEVICE + IRQ_PIN_index + MQTT_SUFFIX_STATE);
-
-  mqttClient.publish(sensorTopic.c_str(), payload, length, UNRETAINED);
-}
-
-/*
- * ###################################################################################################
- *                       M Q T T   C A L L B A C K  
- * ###################################################################################################
- */;/*
- * For more information about MQTT, visit: https://mqtt.org/
- * For more information about pubsubclient, mqttCallback, visit:
- * - https://pubsubclient.knolleary.net/
- * - https://pubsubclient.knolleary.net/api
- * - https://arduinojson.org
- * The function gets a IRQ pin reference number from the topic and
- * handles messages with the folowing suffixes:
- */
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  JsonDocument doc;                         // 
-  byte IRQ_PIN_reference = 0;
-  String topicString = String(topic);
-
-  if( topicString.startsWith(MQTT_PREFIX)) {
-    IRQ_PIN_reference = getIRQ_PIN_reference(topic);
-  }
-
-  if ( topicString.endsWith(MQTT_SUFFIX_TOTAL_TRESHOLD)) {
-    deserializeJson(doc, payload, length);
-    meterData[IRQ_PIN_reference].pulseTotal = long(float(doc[MQTT_NUMBER_ENERG_ENTITYNAME]) * float(interfaceConfig.pulse_per_kWh[IRQ_PIN_reference]));
-    long watt_consumption = 0;
-    publishSensorJson( watt_consumption, IRQ_PIN_reference);
-  } else
-  /* Set pulse time correction in milliseconds. Done by:
-   * Publish: {"pulscorr" : 25}
-   * To topic: energy/monitor_ESP32_48E72997D320/config
-   */
-  if ( topicString.endsWith(MQTT_SUFFIX_CONFIG)) {
-    deserializeJson(doc, payload, length);
-    interfaceConfig.pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
-    writeConfigData();
-  } else
-  /* Publish totals, subtotals to google sheets and reset subtotals. Done by
-   * Publish: true
-   * To topic: energy/monitor_ESP32_48E72997D320/subtotal_reset
-   */
-  if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET)) {
-    if (PRIVATE_UPDATE_GOOGLE_SHEET)
-      updateGoogleSheets( false);
-    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
-      meterData[ii].pulseSubTotal = 0;
-      writeMeterData( ii);
-    }
-    
-  } else
-  if ( topicString.endsWith(MQTT_SUFFIX_STATUS)) {
-    for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
-      configurationPublished[ii] = false;
-    } 
-  }
-}
-
-/*
- * ###################################################################################################
- *                   S T O R E   I R Q    P I N  
- * ###################################################################################################
- */;/*
- *  ISR handler function
- *  The function wil receive a reference to i specific BIT in the 8 bit variable 'IRQ_PINs_stored'
- *  and set the BIT using the  bitSet() function.
- * 
- * Because the function is part of the ISR functionality it is defined as IRAM_ATTR
-*/
-void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference) {
-  millsTimeStamp[BIT_Reference] = millis();
-  bitSet(IRQ_PINs_stored, BIT_Reference);
-}
-
-/*
- * ###################################################################################################
- *                  I S R    Functions
- * ###################################################################################################
-*/;/*
- *  IRS - Define an ISR for each Interrupt channel, which call the common interrupt handler function.
-*/
-void IRAM_ATTR Ext_INT1_ISR() {
-  store_IRQ_PIN( 0);
-}
-void IRAM_ATTR Ext_INT2_ISR() {
-  store_IRQ_PIN( 1);
-}
-void IRAM_ATTR Ext_INT3_ISR() {
-  store_IRQ_PIN( 2);
-}
-void IRAM_ATTR Ext_INT4_ISR() {
-  store_IRQ_PIN( 3);
-}
-void IRAM_ATTR Ext_INT5_ISR() {
-  store_IRQ_PIN( 4);
-}
-void IRAM_ATTR Ext_INT6_ISR() {
-  store_IRQ_PIN( 5);
-}
-void IRAM_ATTR Ext_INT7_ISR() {
-  store_IRQ_PIN( 6);
-}
-void IRAM_ATTR Ext_INT8_ISR() {
-  store_IRQ_PIN( 7);
-}
-
-/*
- * ###################################################################################################
- * ###################################################################################################
- * ###################################################################################################
- *                       S E T U P      B e g i n
+ * ###################   S E T U P      B e g i n     ################################################
  * ###################################################################################################
  * ###################################################################################################
  * ###################################################################################################
  */
 void setup() {
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.begin( 115200);
+                                                                                                        while (!Serial) {
+                                                                                                          ;  // Wait for serial connectionsbefore proceeding
+                                                                                                        }
+                                                                                                        Serial.println(SKETCH_VERSION);
+                                                                                                        Serial.println("Hit [Enter] to start!");
+                                                                                                        while (!Serial.available()) {
+                                                                                                          ;  // In order to prevent unattended execution, wait for [Enter].
+                                                                                                        }
+                                                                                                        while (Serial.available()) {
+                                                                                                          char c = Serial.read();  // Empty input buffer.
+                                                                                                        }
+                                                                                                      #endif
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
 
@@ -833,8 +338,6 @@ void setup() {
   if ( PRIVATE_NO_OF_CHANNELS >= 8)
     attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, FALLING);
 
-
-
   initializeGlobals();
 
   mqttClient.setServer(PRIVATE_MQTT_SERVER.c_str(), PRIVATE_MQTT_PORT);
@@ -842,17 +345,44 @@ void setup() {
 
 /*
  * Read configuration and energy meter data from SD memoory
+ * To prevent SD Cart failures caused by power interruption during mounting, make a delay to wait
+ * for a steady power supply
  */
+  delay( 10000);
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("Initialize SD.");
+                                                                                                      #endif
   if(!SD.begin(5)){
-    indicateError(0);
+    indicateError(1);
   }
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println("Files on SD Card: ");
+                                                                                                        File root;
+                                                                                                        root = SD.open("/");
+                                                                                                        printDirectory( root, 0);
+                                                                                                        root.close();
+                                                                                                        Serial.println( "Done!");
+                                                                                                        breakpoint();
+                                                                                                      #endif
 
   // Reading configuration 
   String configFilename = String(CONFIGURATION_FILENAME);
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.print("Open configuration file: ");
+                                                                                                        Serial.println( configFilename);
+                                                                                                      #endif
   File structFile = SD.open(configFilename, FILE_READ);
   if ( structFile) {
     structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
     structFile.close();
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.print("Configuration file read. Structure version: ");
+                                                                                                        Serial.println( interfaceConfig.structureVersion);
+                                                                                                        Serial.print("Current version: ");
+                                                                                                        Serial.println( (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS);
+                                                                                                        Serial.print("Datafile set number: ");
+                                                                                                        Serial.println( interfaceConfig.dataFileSetNumber);
+                                                                                                      #endif
   }
 
   // Check if new configuration and datafiles are required
@@ -864,16 +394,33 @@ void setup() {
   uint16_t numberOfDatafilesRead = 0;
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
     String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.print("Attempt to open datafile: ");
+                                                                                                        Serial.print( filename);
+                                                                                                      #endif
     structFile = SD.open(filename, FILE_READ);
     if ( structFile) {
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println(". Succeeded.");
+                                                                                                        Serial.print("Attempt to read datafile.");
+                                                                                                      #endif
       if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) == sizeof(meterData[ii])/sizeof(uint8_t)) {
          numberOfDatafilesRead++;
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println(". Succeeded.");
+                                                                                                      #endif
       } else {
         meterData[ii].pulseTotal = 0;
         meterData[ii].pulseSubTotal = 0;
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println(". Failed.");
+                                                                                                      #endif
       }
       structFile.close();
     } else {
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println(". Failed.");
+                                                                                                      #endif
       meterData[ii].pulseTotal = 0;
       meterData[ii].pulseSubTotal = 0;
     }
@@ -881,14 +428,50 @@ void setup() {
 
   // IF any datafiles in the current datafileset exists, create new datafileset
   if (numberOfDatafilesRead > 0)
+  {
     interfaceConfig.dataFileSetNumber++;
-
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println("Creating new dataset.");
+                                                                                                      #endif
+  }
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        else
+                                                                                                        {
+                                                                                                          Serial.println("Reuse existing dataset.");
+                                                                                                        }
+                                                                                                        
+                                                                                                      #endif
   writeConfigData();
+  // Create directory for data file set.
+  String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.print("Creating direectory: ");
+                                                                                                        Serial.println( dirname);
+                                                                                                      #endif
+  if ( !SD.mkdir( dirname))
+  {
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.print("FAILED to create direectory: ");
+                                                                                                        Serial.println( dirname);
+                                                                                                      #endif
+    indicateError(4);
+  }
 
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
     writeMeterData( ii);
   }
-
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        Serial.println("Files on SD Card: ");
+                                                                                                        root = SD.open("/");
+                                                                                                        printDirectory( root, 0);
+                                                                                                        root.close();
+                                                                                                        Serial.println( "Done!");
+                                                                                                        breakpoint();
+                                                                                                      #endif
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("SD Initialized.");
+                                                                                                        breakpoint();
+                                                                                                      #endif
   digitalWrite(LED_BUILTIN, LOW);           // Turn OFF LED before entering loop
 }
 
@@ -1176,3 +759,675 @@ void loop() {
     }
   }
 }
+/*
+ * ###################################################################################################
+ * ###################################################################################################
+ * ###################################################################################################
+ *                       F  U  N  C  T  I  O  N      D  E  F  I  N  I  T  I  O  N  S
+ * ###################################################################################################
+ * ###################################################################################################
+ * ###################################################################################################
+*/
+/*
+ * Flashing LED to indicate an error
+ * 
+ */
+void indicateError( uint8_t errorNumber)
+{
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("Error indication called.");
+                                                                                                      #endif
+  digitalWrite(LED_BUILTIN, HIGH);
+  while (true)
+  {
+    for ( uint8_t ii = 0; ii < errorNumber; ii++)
+    {
+      digitalWrite(LED_BUILTIN, LOW);
+      delay( BLIP);
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay( BLIP);
+    }
+    delay( 1000);
+  }
+}
+/* ###################################################################################################
+ *               W R I T E   C O N F I G   D A T A
+ * ###################################################################################################
+ */
+void writeConfigData()
+{
+  String configFilename = String(CONFIGURATION_FILENAME);
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("Open config file for writing");
+                                                                                                      #endif
+  File structFile = SD.open(configFilename, FILE_WRITE);
+  if (!structFile)
+    indicateError(2);
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("Successfull opened");
+                                                                                                      #endif
+  structFile.seek(0);
+  structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig));
+  structFile.close();
+}
+/* ###################################################################################################
+ *               W R I T E   M E T E R   D A T A
+ * ###################################################################################################
+ */
+void writeMeterDataFile( uint8_t datafileNumber)
+{
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.print("Open datafile: ");
+                                                                                                        Serial.print( filename);
+                                                                                                        Serial.print(". for writing...");
+                                                                                                      #endif
+  File structFile = SD.open(filename, FILE_WRITE);
+  if (!structFile)
+  {
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.println("FAILED!");
+                                                                                                      #endif
+    indicateError(3);
+  }
+                                                                                                        #ifdef DEBUG
+                                                                                                        Serial.println("Successful.");
+                                                                                                      #endif
+
+  structFile.seek(0);
+  structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber]));
+  structFile.close(); 
+}
+
+void writeMeterData(uint8_t datafileNumber)
+{
+  if ( numberOfWrites++ >  NUMBER_OF_WRITES)
+  {
+    interfaceConfig.dataFileSetNumber++;
+    String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
+    SD.mkdir( dirname);
+    writeConfigData();
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+      writeMeterDataFile(ii);
+  } else
+    writeMeterDataFile(datafileNumber);
+}
+
+/* ###################################################################################################
+ *               S E T    C O N F I G U R A T I O N    D E F A U L T S
+ * ###################################################################################################
+ * This function is called when:
+ * - a new SD Card is present
+ * - Changes has been done to the 'config_t' structure
+ * - when the number of channels (PRIVATE_NO_OF_CHANNELS) has been changed.
+ * The function will delite the old configuration file and create a new one.
+ * It will skip all existing data file sets.
+ * - int structureVersion;
+ * - unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
+ * - uint16_t dataFileSetNumber;                  // In which data file set ("directory") the data files will be located.
+ * - uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
+ */
+
+void setConfigurationDefaults()
+{
+  interfaceConfig.structureVersion = (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS;
+  interfaceConfig.pulseTimeCorrection = 0;  // Used to calibrate the calculated consumption.
+
+  // Find new data file set for data files == Skip all existing data files.
+  uint8_t numberOfFilesExists = PRIVATE_NO_OF_CHANNELS;
+  for ( uint16_t filesetNumber = 0; numberOfFilesExists == PRIVATE_NO_OF_CHANNELS; filesetNumber++)
+  {
+    interfaceConfig.dataFileSetNumber = filesetNumber;
+    numberOfFilesExists = 0;
+    for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++)
+    {
+      String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
+      if (SD.exists(dataFileName))
+        numberOfFilesExists++;
+    }
+  }
+  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+    interfaceConfig.pulse_per_kWh[ii] = private_default_pulse_per_kWh[ii];    // Number of pulses as defined for each energy meter
+
+  String filename = String(CONFIGURATION_FILENAME);
+  if (SD.exists(filename))
+  {
+    SD.remove(filename);
+  }
+  writeConfigData();
+}
+/* ###################################################################################################
+ *                     I N I T I A L I Z E   G L O B A L S
+ * ###################################################################################################
+ */
+void initializeGlobals()
+{
+  for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+  {
+    metaData[ii].pulseTimeStamp = 0;
+    metaData[ii].pulseLength = 0;
+
+    // >>>>>>>>>>    Set flag for publishing HA configuration   <<<<<<<<<<<<< 
+    configurationPublished[ii] = false;
+  }
+
+  // >>>>>>>>>>>>>   Set globals for MQTT Device and Client   <<<<<<<<<<<<<<<<<<
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+
+  char macStr[13] = {0};
+  sprintf(macStr, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+  mqttDeviceNameWithMac = String(MQTT_DEVICE_NAME + macStr);
+  mqttClientWithMac = String(MQTT_CLIENT + macStr);
+}
+
+/* ###################################################################################################
+ *                  P U B L I S H   S K E T C H   V E R S I O N
+ * ###################################################################################################
+ *  As the sketch will esecute in silence, one way to se which version of the SW is running will be
+ *  to subscribe to topic defined as (MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SKTECH_VERSION)
+ *  on the MQTT broker, configured in the privateConfig.h file.
+ *  This will return the value of (SKETCH_VERSION)
+ */
+void publish_sketch_version()   // Publish only once at every reboot.
+{  
+  IPAddress ip = WiFi.localIP();
+  String versionTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SKTECH_VERSION);
+  String versionMessage = String(SKETCH_VERSION + String("\nConnected to SSID: \'") +\
+                                  String(PRIVATE_WIFI_SSID) + String("\' at: ") +\
+                                  String(ip[0]) + String(".") +\
+                                  String(ip[1]) + String(".") +\
+                                  String(ip[2]) + String(".") +\
+                                  String(ip[3]));
+
+  mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
+}
+
+/* ###################################################################################################
+ *                  P U B L I S H   S T A T U S M E S S A G E
+ * ###################################################################################################
+ *  Send status messages to MQTT
+ * 
+*/
+void publishStatusMessage(String statusMessage) 
+{
+  String statusTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + MQTT_SUFFIX_STATUS);
+  mqttClient.publish(statusTopic.c_str(), statusMessage.c_str(), RETAINED);
+}
+
+/* ###################################################################################################
+ *      G E T   I R Q  P I N   r e f e r e n c e  f r o m   t o p i c   s t r i n g
+ * ###################################################################################################
+ * 
+ * IRQ pin reference is expected to be les than 2 digits!
+ */
+byte getIRQ_PIN_reference(char* topic)
+{
+  uint16_t startIndex = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/").length();
+  uint16_t i = 0;
+  uint8_t result = 0;
+  while(topic[startIndex + i] != '/' && i < 2)  // IRQ pin reference les than 2 digits!
+  {
+    result = result * 10 + (topic[startIndex+i]-'0');
+    i++;
+  }
+  return result;
+}
+/* ###################################################################################################
+ *                         U P D A T E     G O O G L E     S H E E T S
+ * ###################################################################################################
+ * Ideas taken from:
+ * https://iotdesignpro.com/articles/esp32-data-logging-to-google-sheets-with-google-scripts
+ *  
+ */
+void updateGoogleSheets( boolean powerOn)
+{
+  // >>>>>>>>>>>>>   Create data-URL string for HTTP request   <<<<<<<<<<<<<<<<<<
+  String urlData = "/exec?meterData=";
+
+  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
+    urlData += String( float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2) + ",";
+  
+  for ( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
+  {
+    urlData += String( float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]), 2);
+    if ( IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS - 1)
+      urlData += String(",");
+  }
+
+  if ( powerOn == true)
+    urlData += String(",PowerUp");
+
+  // >>>>>>>>>>>>>   Create URL for HTTP request   <<<<<<<<<<<<<<<<<<
+  String urlFinal = "https://script.google.com/macros/s/" + PRIVATE_GOOGLE_SCRIPT_ID + urlData;
+
+  // >>>>>>>>>>>>>   Make HTTP request to google sheet  <<<<<<<<<<<<<<<<<<
+  if ( PRIVATE_UPDATE_GOOGLE_SHEET)
+  {
+    HTTPClient http;
+    http.begin(urlFinal.c_str());
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    // >>>>>>>>>>>>>   getting response from google sheet  <<<<<<<<<<<<<<<<<<
+    if (int httpCode = http.GET())
+    {
+      String httpMessage = http.getString();
+      String statusMessage = String( String("HTTP Status Code: ") + httpCode + "HTTP Message: " + httpMessage);
+      publishStatusMessage( statusMessage);
+    }
+    //---------------------------------------------------------------------
+    http.end();
+  }
+}
+/* ###################################################################################################
+ *          G E T   M I L L I S   T O   N E X T    T I M E   C H E C K
+ * ###################################################################################################
+
+/*
+ * Then function is used to schedule a piece of program code at a time defined by the two definitions:
+ * #define SCHEDULE_MINUTE  mm
+ * #define SCHEDULE_HOUR  hh
+ * 
+ * getMillisToNextTimeCheck() will return the number om millis() diveded by two, counted from the time 
+ * it is called to the time defined.
+ * Doing it this way reduce the number of calls to the timeserver.
+ * 
+ * getMillisToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
+ * 
+ * Usage:
+ * #include "time.h"
+ * 
+ * #define SCHEDULE_MINUTE  mm
+ * #define SCHEDULE_HOUR  hh
+ * 
+ * const char* ntpServer = "pool.ntp.org";
+ * const long  gmtOffset_sec = 3600;
+ * const int   daylightOffset_sec = 3600;
+ * 
+ * 
+ * setup() {
+ *   timeLastCheckedAt = millis();
+ *   millisToNextTimeCheck = getMillisToNextTimeCheck();
+ * }
+ * 
+ * loop() {
+ *  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
+ *    timeLastCheckedAt = millis();
+ *    millisToNextTimeCheck = getMillisToNextTimeCheck();
+ *  }
+ *  if ( millisToNextTimeCheck == 0 ) {
+ *    millisToNextTimeCheck = 60000  // Snooze one minute to avoid calls within the same minute
+ *     
+ *     * Code to be executred
+ *      
+ *   }
+ * 
+ */
+unsigned long getMillisToNextTimeCheck()
+{
+  unsigned long timeToNextTimecheckInSeconcs;
+  struct tm timeinfo;
+  long dogn = 0;
+  int sc_min = SCHEDULE_MINUTE;
+  int sc_hour = SCHEDULE_HOUR;
+
+  if(!getLocalTime(&timeinfo))
+  {
+    return -1;
+  }
+
+  if ( timeinfo.tm_hour == sc_hour and timeinfo.tm_min == sc_min)
+  {
+    timeToNextTimecheckInSeconcs = 0;
+  } 
+  else
+  {
+    if (((sc_hour * 60 * 60) + (sc_min * 60)) < ((timeinfo.tm_hour * 60 * 60) + (timeinfo.tm_min * 60) + timeinfo.tm_sec))
+    {
+      dogn = 24 * 60 * 60;
+    }
+    timeToNextTimecheckInSeconcs = ((((sc_hour * 60 * 60) + (sc_min * 60) + dogn) - ((timeinfo.tm_hour * 60 * 60) +\
+                                   (timeinfo.tm_min * 60) + timeinfo.tm_sec)) /
+                                   2) *1000 + 30000;
+  }
+
+  return timeToNextTimecheckInSeconcs;
+}
+/*
+ * ###################################################################################################
+ *              P U B L I S H   M Q T T   E N E R G Y   C O N F I G U R A T I O N
+ * ###################################################################################################
+ * 
+ * component can take the values: "sensor" or "number"
+ * device_class can take the values "energy" or "power"
+*/
+/*  Eksempel på Topic og Payload for MQTT sensor integration, deviceClass = "energy":
+ *  Where : Component = MQTT_SENSOR_COMPONENT and PIN_reference = 0
+ *
+ *  energyTopic: homeassistant/sensor/energy/meter_0/config
+ *  energyMessage:
+ *  {
+ *    "name": "Subtotal",
+ *    "state_topic": "homeassistant/energy/meter_0/state",
+ *    "device_class": "energy",
+ *    "unit_of_measurement": "kWh",
+ *    "unique_id": "Subtotal_meter_0",
+ *    "value_template": "{{ value_json.Subtotal}}",
+ *    "device":{
+ *      "identifiers":[
+ *        "meter_0"
+ *      ],
+ *      "name": "Energi - Varmepumpe SMO 40 E1"
+ *    }
+ *  }
+ */
+/*  Eksempel på Topic og Payload for MQTT sensor integration, deviceClass = "power":
+ *  Where : Component = MQTT_SENSOR_COMPONENT and PIN_reference = 0
+ *
+ *  energyTopic: homeassistant/sensor/energy/meter_0/config
+ *  energyMessage:
+ *  {
+ *    "name": "Forbrug",
+ *    "state_topic": "homeassistant/energy/meter_0/state",
+ *    "device_class": "power",
+ *    "unit_of_measurement": "W",
+ *    "unique_id": "Forbrug_meter_0",
+ *    "value_template": "{{ value_json.Forbrug}}",
+ *    "device":{
+ *      "identifiers":[
+ *        "meter_0"
+ *      ],
+ *      "name": "Energi - Varmepumpe SMO 40 E1"
+ *     }
+ *  }
+ */
+/*  Eksempel på Topic og Payload for MQTT Numner integration, deviceClass = "energy":
+ *  Where : Component = MQTT_NUMBER_COMPONENT and PIN_reference = 0
+ *
+ *  energyTopic: homeassistant/number/energy/meter_0/config
+ *  energyMessage:
+ *  {
+ *    "command_topic" : "energy/monitor_ESP32_48E72997D320/threshold",
+ *    "command_template" : {"Total": {{ value }} },
+ *    "max" : "99999.99",
+ *    "min" : "0.0",
+ *    "name": "Total",
+ *    "state_topic": "homeassistant/energy/meter_0/state",
+ *    "device_class": "energy",
+ *    "unit_of_measurement": "kWh",
+ *    "unique_id": "Total_meter_0",
+ *    "value_template": "{{ value_json.Total}}",
+ *    "device":{
+ *      "identifiers":[
+ *        "meter_0"
+ *      ],
+ *      "name": "Energi - Varmepumpe SMO 40 E1"
+ *    }
+ *  }
+ * 
+ */
+/*  Eksempel på Topic og Payload for opdatering af state (Værdier)
+Topic_ homeassistant/energy/meter_0/state
+Payload:
+{
+	"Subtotal" : "123",
+  "Forbrug" : "456",
+  "Total" : "789"
+}
+ */
+void publishMqttEnergyConfigJson( String component, String entityName, String unitOfMesurement, String deviceClass, u_int8_t PIN_reference)
+{
+  uint8_t payload[1024];
+  JsonDocument doc;
+  String energyMeter = String( private_energyMeters[PIN_reference]);
+
+  if ( component == MQTT_NUMBER_COMPONENT & deviceClass == MQTT_ENERGY_DEVICECLASS)
+  {
+    doc["command_topic"] = String(MQTT_PREFIX + mqttDeviceNameWithMac + "/" + PIN_reference + MQTT_SUFFIX_TOTAL_TRESHOLD);
+    doc["command_template"] = String("{\"" + entityName + "\": {{ value }} }");
+    doc["max"] = 99999.99;
+    doc["min"] = 0.0;
+    doc["step"] = 0.01;
+  }
+  doc["name"] = entityName;
+  doc["state_topic"] = String(MQTT_DISCOVERY_PREFIX + MQTT_PREFIX + MQTT_PREFIX_DEVICE + PIN_reference + MQTT_SUFFIX_STATE);
+  doc["availability_topic"] = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
+  doc["payload_available"] = "True";
+  doc["payload_not_available"] = "False";
+  doc["device_class"] = deviceClass;
+  doc["unit_of_measurement"] = unitOfMesurement;
+  doc["unique_id"] = String(entityName + "_" + MQTT_PREFIX_DEVICE + PIN_reference);
+  doc["qos"] = 0;
+
+  if ( component == MQTT_SENSOR_COMPONENT & deviceClass == MQTT_POWER_DEVICECLASS)
+    doc["value_template"] = String("{{ value_json." + entityName + "}}");
+  else 
+    doc["value_template"] = String("{{ value_json." + entityName + " | round(2)}}");
+
+  JsonObject device = doc["device"].to<JsonObject>();
+
+  device["identifiers"][0] = String(MQTT_PREFIX_DEVICE + PIN_reference);
+  device["name"] = String("Energi - " + energyMeter);
+
+  size_t length = serializeJson(doc, payload);
+  String energyTopic = String( MQTT_DISCOVERY_PREFIX + component + "/" + deviceClass + "/" + MQTT_PREFIX_DEVICE + PIN_reference + "/config");
+
+  mqttClient.publish(energyTopic.c_str(), payload, length, UNRETAINED);
+}
+/*
+ * ###################################################################################################
+ *                       P U B L I S H   M Q T T   C O N F I G U R A T I O N S  
+ * ###################################################################################################
+*/
+void publishMqttConfigurations( uint8_t device) {
+
+  publishMqttEnergyConfigJson(MQTT_SENSOR_COMPONENT, MQTT_SENSOR_ENERG_ENTITYNAME, "kWh", MQTT_ENERGY_DEVICECLASS, device);
+  publishMqttEnergyConfigJson(MQTT_SENSOR_COMPONENT, MQTT_SENSOR_POWER_ENTITYNAME, "W", MQTT_POWER_DEVICECLASS, device);
+  publishMqttEnergyConfigJson(MQTT_NUMBER_COMPONENT, MQTT_NUMBER_ENERG_ENTITYNAME, "kWh", MQTT_ENERGY_DEVICECLASS, device);
+
+  configurationPublished[device] = true;
+}
+/*
+ * ###################################################################################################
+ *                       P U B L I S H   S E N S O R   J S O N
+ * ###################################################################################################
+*/
+/*  Eksempel på Topic og Payload for opdatering af state (Værdier)
+Topic_ homeassistant/energy/meter_0/state
+Payload:
+{
+	"Subtotal" : "123",
+  "Forbrug" : "456",
+  "Total" : "789"
+} 
+*/
+void publishSensorJson( long powerConsumption, uint8_t IRQ_PIN_index)
+{
+  uint8_t payload[256];
+  JsonDocument doc;
+
+  doc[MQTT_SENSOR_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseSubTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
+  doc[MQTT_SENSOR_POWER_ENTITYNAME] = powerConsumption;
+  doc[MQTT_NUMBER_ENERG_ENTITYNAME] = float(meterData[IRQ_PIN_index].pulseTotal) / float(interfaceConfig.pulse_per_kWh[IRQ_PIN_index]);
+
+  size_t length = serializeJson(doc, payload);
+  String sensorTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_PREFIX + MQTT_PREFIX_DEVICE + IRQ_PIN_index + MQTT_SUFFIX_STATE);
+
+  mqttClient.publish(sensorTopic.c_str(), payload, length, UNRETAINED);
+}
+/*
+ * ###################################################################################################
+ *                       M Q T T   C A L L B A C K  
+ * ###################################################################################################
+ */;/*
+ * For more information about MQTT, visit: https://mqtt.org/
+ * For more information about pubsubclient, mqttCallback, visit:
+ * - https://pubsubclient.knolleary.net/
+ * - https://pubsubclient.knolleary.net/api
+ * - https://arduinojson.org
+ * The function gets a IRQ pin reference number from the topic and
+ * handles messages with the folowing suffixes:
+ */
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+  JsonDocument doc;                         // 
+  byte IRQ_PIN_reference = 0;
+  String topicString = String(topic);
+
+  if( topicString.startsWith(MQTT_PREFIX))
+  {
+    IRQ_PIN_reference = getIRQ_PIN_reference(topic);
+  }
+
+  if ( topicString.endsWith(MQTT_SUFFIX_TOTAL_TRESHOLD))
+  {
+    deserializeJson(doc, payload, length);
+    meterData[IRQ_PIN_reference].pulseTotal = long(float(doc[MQTT_NUMBER_ENERG_ENTITYNAME]) * float(interfaceConfig.pulse_per_kWh[IRQ_PIN_reference]));
+    long watt_consumption = 0;
+    publishSensorJson( watt_consumption, IRQ_PIN_reference);
+  }
+  else if ( topicString.endsWith(MQTT_SUFFIX_CONFIG))
+  {
+    /* Set pulse time correction in milliseconds. Done by:
+    * Publish: {"pulscorr" : 25}
+    * To topic: energy/monitor_ESP32_48E72997D320/config
+    */
+  
+    deserializeJson(doc, payload, length);
+    interfaceConfig.pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
+    writeConfigData();
+  }
+  else if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET))
+  {
+    /* Publish totals, subtotals to google sheets and reset subtotals. Done by
+    * Publish: true
+    * To topic: energy/monitor_ESP32_48E72997D320/subtotal_reset
+    */
+    
+    if (PRIVATE_UPDATE_GOOGLE_SHEET)
+      updateGoogleSheets( false);
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+    {
+      meterData[ii].pulseSubTotal = 0;
+      writeMeterData( ii);
+    }
+    
+  }
+  else if ( topicString.endsWith(MQTT_SUFFIX_STATUS))
+  {
+    for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+    {
+      configurationPublished[ii] = false;
+    } 
+  }
+}
+/*
+ * ###################################################################################################
+ *                   S T O R E   I R Q    P I N  
+ * ###################################################################################################
+ */;/*
+ *  ISR handler function
+ *  The function wil receive a reference to i specific BIT in the 8 bit variable 'IRQ_PINs_stored'
+ *  and set the BIT using the  bitSet() function.
+ * 
+ * Because the function is part of the ISR functionality it is defined as IRAM_ATTR
+*/
+void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)
+{
+  millsTimeStamp[BIT_Reference] = millis();
+  bitSet(IRQ_PINs_stored, BIT_Reference);
+}
+
+/*
+ * ###################################################################################################
+ *                  I S R    Functions
+ * ###################################################################################################
+*/;/*
+ *  IRS - Define an ISR for each Interrupt channel, which call the common interrupt handler function.
+*/
+void IRAM_ATTR Ext_INT1_ISR()
+{
+  store_IRQ_PIN( 0);
+}
+void IRAM_ATTR Ext_INT2_ISR()
+{
+  store_IRQ_PIN( 1);
+}
+void IRAM_ATTR Ext_INT3_ISR()
+{
+  store_IRQ_PIN( 2);
+}
+void IRAM_ATTR Ext_INT4_ISR()
+{
+  store_IRQ_PIN( 3);
+}
+void IRAM_ATTR Ext_INT5_ISR()
+{
+  store_IRQ_PIN( 4);
+}
+void IRAM_ATTR Ext_INT6_ISR()
+{
+  store_IRQ_PIN( 5);
+}
+void IRAM_ATTR Ext_INT7_ISR()
+{
+  store_IRQ_PIN( 6);
+}
+void IRAM_ATTR Ext_INT8_ISR()
+{
+  store_IRQ_PIN( 7);
+}
+
+
+                                                                                                      #ifdef DEBUG
+                                                                                                        void breakpoint()
+                                                                                                        {
+                                                                                                          while (Serial.available())
+                                                                                                          {
+                                                                                                            char c = Serial.read();  // Empty input buffer.
+                                                                                                          }
+                                                                                                          Serial.println("Enter any character and hit [Enter] to contiue!");
+                                                                                                          while (!Serial.available())
+                                                                                                          {
+                                                                                                            ;  // In order to prevent unattended execution, wait for [Enter].
+                                                                                                          }
+                                                                                                          while (Serial.available())
+                                                                                                          {
+                                                                                                            char c = Serial.read();  // Empty input buffer.
+                                                                                                          }
+
+                                                                                                        }
+
+                                                                                                      #endif
+
+                                                                                                      #ifdef SD_DEBUG
+                                                                                                        void printDirectory( File dir, int numTabs)
+                                                                                                        {
+                                                                                                          while (true)
+                                                                                                          {
+                                                                                                            File entry =  dir.openNextFile();
+                                                                                                            if (! entry)
+                                                                                                            {
+                                                                                                              // no more files
+                                                                                                              break;
+                                                                                                            }
+                                                                                                            for (uint8_t i = 0; i < numTabs; i++) {
+                                                                                                              Serial.print('\t');
+                                                                                                            }
+                                                                                                            Serial.print(entry.name());
+                                                                                                            if (entry.isDirectory())
+                                                                                                            {
+                                                                                                              Serial.println("/");
+                                                                                                              printDirectory(entry, numTabs + 1);
+                                                                                                            }
+                                                                                                            else
+                                                                                                            {
+                                                                                                              // files have sizes, directories do not
+                                                                                                              Serial.print("\t\t");
+                                                                                                              Serial.println(entry.size(), DEC);
+                                                                                                            }
+                                                                                                            entry.close();
+                                                                                                          }
+                                                                                                        }
+                                                                                                      #endif
