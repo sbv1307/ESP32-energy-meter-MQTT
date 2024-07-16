@@ -61,3 +61,6 @@ build_flags = -D MQTT_MAX_PACKET_SIZE=1024
 ##### Installed by: PlatformIO -> PIO Home -> Open -> Libraries -> Registry "Search Libraries"
 **ArduinoJson** by Benoit Blanchon  - Version 7.0.1<br>
 **PubSubClient** 0                  - Version 2.8
+
+### Local kicad-library
+The Local kicad-library located at [github](https://github.com/sbv1307/kicad-library) is required for the hardware. See the README.md for more information. 

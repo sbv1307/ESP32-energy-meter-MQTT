@@ -47,7 +47,7 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.1.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.0.0"
 
 //#define DEBUG true
 //#define SD_DEBUG true
@@ -68,6 +68,10 @@
  *          -  Startup delay for 10 sec. introduced, before accessinmg the SD Card. This is to prevent SD Card issues while connecting the device to power.
  *             While onnecting the device to power will in moast cases cause multible power failures (dis-connections), before the power is stable.
  *          -  Test time stamp for IRQ. If Last IRQ is less 500 millis, IRQ is ignored. 
+ *  4.0.0   Firmware modified to match hardware. 
+ *          -  Pull up is no longer required, as the new hardware inclcudes hex schmidt-triggers.
+ *          -  IRQ's are now tgriggered my a raising pulse.
+ *          -  Status LED is lit when GPIO pin is LOW
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -315,31 +319,31 @@ void setup() {
                                                                                                         }
                                                                                                       #endif
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
-  digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
+  digitalWrite(LED_BUILTIN, LOW);          // Turn ON LED to indicate startup
 
   // Initialize Interrupt pins
   for ( u_int8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
   {
-    pinMode(channelPin[ii], INPUT_PULLUP);
+    pinMode(channelPin[ii], INPUT);
   }
 
   // arm interrupt. Create a functioncall for each interrupt pin
   if ( PRIVATE_NO_OF_CHANNELS >= 1)
-    attachInterrupt(private_Metr1_GPIO, Ext_INT1_ISR, FALLING);
+    attachInterrupt(private_Metr1_GPIO, Ext_INT1_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 2)
-    attachInterrupt(private_Metr2_GPIO, Ext_INT2_ISR, FALLING);
+    attachInterrupt(private_Metr2_GPIO, Ext_INT2_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 3)
-    attachInterrupt(private_Metr3_GPIO, Ext_INT3_ISR, FALLING);
+    attachInterrupt(private_Metr3_GPIO, Ext_INT3_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 4)
-    attachInterrupt(private_Metr4_GPIO, Ext_INT4_ISR, FALLING);
+    attachInterrupt(private_Metr4_GPIO, Ext_INT4_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 5)
-    attachInterrupt(private_Metr5_GPIO, Ext_INT5_ISR, FALLING);
+    attachInterrupt(private_Metr5_GPIO, Ext_INT5_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 6)
-    attachInterrupt(private_Metr6_GPIO, Ext_INT6_ISR, FALLING);
+    attachInterrupt(private_Metr6_GPIO, Ext_INT6_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 7)
-    attachInterrupt(private_Metr7_GPIO, Ext_INT7_ISR, FALLING);
+    attachInterrupt(private_Metr7_GPIO, Ext_INT7_ISR, RISING);
   if ( PRIVATE_NO_OF_CHANNELS >= 8)
-    attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, FALLING);
+    attachInterrupt(private_Metr8_GPIO, Ext_INT8_ISR, RISING);
 
   initializeGlobals();
 
@@ -487,7 +491,7 @@ void setup() {
                                                                                                         Serial.println("SD Initialized.");
                                                                                                         breakpoint();
                                                                                                       #endif
-  digitalWrite(LED_BUILTIN, LOW);           // Turn OFF LED before entering loop
+  digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
 }
 
 /*
@@ -802,14 +806,14 @@ void indicateError( uint8_t errorNumber)
                                                                                                       #ifdef DEBUG
                                                                                                         Serial.println("Error indication called.");
                                                                                                       #endif
-  digitalWrite(LED_BUILTIN, HIGH);
+  digitalWrite(LED_BUILTIN, LOW);
   while (true)
   {
     for ( uint8_t ii = 0; ii < errorNumber; ii++)
     {
-      digitalWrite(LED_BUILTIN, LOW);
-      delay( BLIP);
       digitalWrite(LED_BUILTIN, HIGH);
+      delay( BLIP);
+      digitalWrite(LED_BUILTIN, LOW);
       delay( BLIP);
     }
     delay( 1000);
