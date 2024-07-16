@@ -8,8 +8,12 @@ Firmware/platformio.ini
 Firmware/src/privateConfig.h
 
 
+
+
 # temporary excludes
 Hardware/energiRegistrationForHA-backups/*
+Hardware/library/*
+Hardware/library/JLCPCB
 Library/*
 *.pdf
 *.dat
@@ -20,6 +24,8 @@ Library/*
 fp-lib-table
 jlcpcb/*
 sym-lib-table
+
+.gitmodules
 
 # Developer files  
 developer/*

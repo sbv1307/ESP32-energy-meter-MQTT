@@ -35,11 +35,14 @@ const uint16_t PRIVATE_MQTT_PORT    = 1883;     // mqtt port (default is 1883)
 #define private_Metr8_GPIO   27
 
 /*
- *  Google sheets script id. Find the Sheet ID from the Google Sheet URL
+ *  Google sheets script id. 
+ *  Find the schript ID from Google Apps Script -> Deploy -> Manage Deployments -> (Select Deployment) -> Copy ID part of Web Url.
+ *  Example: https://script.google.com/macros/s/2AAU82PQwSI9opXFDJ1CNyhjA0fiJGPXuxYloCgRnfN242lnb2r6SgkkXSUDRdhWijJDq3GyWv/exec
+ *  ID =                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  *  The Google sheets script id entered here is an example!
 */
 bool PRIVATE_UPDATE_GOOGLE_SHEET = true;   // Set the flag to true if data are to be added to Google sheets
-const String PRIVATE_GOOGLE_SCRIPT_ID = "1BdQzuTeYr4Tf4zwT-LP1fk63oWZTrQ_cIDfgWfgD";
+const String PRIVATE_GOOGLE_SCRIPT_ID = "2AAU82PQwSI9opXFDJ1CNyhjA0fiJGPXuxYloCgRnfN242lnb2r6SgkkXSUDRdhWijJDq3GyWv";
 
 /*
  * Define when Google sheets are to be updated
@@ -52,6 +55,7 @@ const String PRIVATE_GOOGLE_SCRIPT_ID = "1BdQzuTeYr4Tf4zwT-LP1fk63oWZTrQ_cIDfgWf
 #define PRIVATE_NO_OF_CHANNELS 8
 
 // Define default number of pulses per kWh for each energy meter.
+
 uint16_t private_default_pulse_per_kWh[PRIVATE_NO_OF_CHANNELS] = {1000,1000,1000,1000,1000,100,100,100};
 
 char * private_energyMeters[] = {

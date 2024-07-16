@@ -49,8 +49,8 @@
 
 #define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V3.1.0"
 
-// #define DEBUG true
-// #define SD_DEBUG true
+//#define DEBUG true
+//#define SD_DEBUG true
 
 /* Version history:
  *  1.0.0   Initial production version.
@@ -67,6 +67,7 @@
  *             Data file sets now placed in directories.
  *          -  Startup delay for 10 sec. introduced, before accessinmg the SD Card. This is to prevent SD Card issues while connecting the device to power.
  *             While onnecting the device to power will in moast cases cause multible power failures (dis-connections), before the power is stable.
+ *          -  Test time stamp for IRQ. If Last IRQ is less 500 millis, IRQ is ignored. 
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -108,6 +109,8 @@
  *  - Reduce boot time to reduce loss of Energy meter pulses. Might require use of SdFat library  instead of SD library.
  *  - Imlement ESP.restart() if required. Consider to implement EEPROM.write() https://randomnerdtutorials.com/esp32-flash-memory/
  *    during call to ESP.resart(). Writes for every update will kill flash memory. 
+ *  - Configurable parameters - Configuration thrount MQTT:
+ *    - Google Sheet ID
  */
 
 /*
@@ -126,7 +129,6 @@
 #define WIFI_CONNECT_POSTPONE 30000     // Number of millis between WiFi connect attempts, when WiFi.begin fails to connect.
 #define MQTT_CONNECT_POSTPONE 30000     // Number of millisecunds between MQTT connect dattempts, when MQTT connect fails to connect.
 #define BLIP 100                        // Time in milliseconds the LED will blink
-#define MAX_COMSUMPTION 2200            // Maximum of Watt comsumptino to be registrated. A software method to prevent fake pulses
 #define MIN_CONSUMPTION 25              // Define the minimum powerconsumption published before publishing 0
                                         // See '>>>    Pulse time check  <<<' in the last part of the loop() for further details.
 #define RETAINED true                   // Used in MQTT puplications. Can be changed during development and bugfixing.
@@ -316,7 +318,8 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
 
   // Initialize Interrupt pins
-  for ( u_int8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+  for ( u_int8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+  {
     pinMode(channelPin[ii], INPUT_PULLUP);
   }
 
@@ -352,7 +355,8 @@ void setup() {
                                                                                                       #ifdef DEBUG
                                                                                                         Serial.println("Initialize SD.");
                                                                                                       #endif
-  if(!SD.begin(5)){
+  if(!SD.begin(5))
+  {
     indicateError(1);
   }
                                                                                                       #ifdef SD_DEBUG
@@ -372,7 +376,8 @@ void setup() {
                                                                                                         Serial.println( configFilename);
                                                                                                       #endif
   File structFile = SD.open(configFilename, FILE_READ);
-  if ( structFile) {
+  if ( structFile)
+  {
     structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
     structFile.close();
                                                                                                       #ifdef SD_DEBUG
@@ -386,14 +391,17 @@ void setup() {
   }
 
   // Check if new configuration and datafiles are required
-  if ( interfaceConfig.structureVersion != (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS) {
+  if ( interfaceConfig.structureVersion != (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS)
+  {
     setConfigurationDefaults();
   }
 
 // Reading datafiles.
   uint16_t numberOfDatafilesRead = 0;
-  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
-    String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
+  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+  {
+    String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) +\
+                              FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
                                                                                                       #ifdef SD_DEBUG
                                                                                                         Serial.print("Attempt to open datafile: ");
                                                                                                         Serial.print( filename);
@@ -404,12 +412,16 @@ void setup() {
                                                                                                         Serial.println(". Succeeded.");
                                                                                                         Serial.print("Attempt to read datafile.");
                                                                                                       #endif
-      if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) == sizeof(meterData[ii])/sizeof(uint8_t)) {
+      if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
+          sizeof(meterData[ii])/sizeof(uint8_t))
+      {
          numberOfDatafilesRead++;
                                                                                                       #ifdef SD_DEBUG
                                                                                                         Serial.println(". Succeeded.");
                                                                                                       #endif
-      } else {
+      } 
+      else
+      {
         meterData[ii].pulseTotal = 0;
         meterData[ii].pulseSubTotal = 0;
                                                                                                       #ifdef SD_DEBUG
@@ -417,7 +429,9 @@ void setup() {
                                                                                                       #endif
       }
       structFile.close();
-    } else {
+    }
+    else
+    {
                                                                                                       #ifdef SD_DEBUG
                                                                                                         Serial.println(". Failed.");
                                                                                                       #endif
@@ -457,7 +471,8 @@ void setup() {
     indicateError(4);
   }
 
-  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+  {
     writeMeterData( ii);
   }
                                                                                                       #ifdef SD_DEBUG
@@ -655,41 +670,47 @@ void loop() {
       LED_toggledAt = millis();
     }
 
-    for( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++) { // Iterate through all bits in the byte IRQ_PINs_stored.
+    // Iterate through all bits in the byte IRQ_PINs_stored.
+    for( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
+    {
       /*
         *  If bit in IRQ_PINs_stored matches the bit set in pinMask: Calculate powerconsumption and publist data.
         */
-      if( IRQ_PINs_stored & pinMask ) {                       // If bit is set 
-        if( esp32Connected and !configurationPublished[IRQ_PIN_index]) {
+      if( IRQ_PINs_stored & pinMask)                       // If bit is set 
+      {
+        if( esp32Connected and !configurationPublished[IRQ_PIN_index])
+        {
           publishMqttConfigurations( IRQ_PIN_index);
         }
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Calculate power comsumption   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         /*
-          * It does not make sence to calculate consumption when the privious pulse is unkown (0) or when millis() has owerflown and millsTimeStamp
+          * It does not make sence to calculate consumption when the privious pulse is unkown (0) or 
+          * when millis() has owerflown and millsTimeStamp
           * is before pulseTimeStamp.
-          * When millis overflows, the pulsetime (millsTimeStamp - pulseTimeStamp + pulseTimeCorrection) could ofcause be calculated, but it brings complexity to the code 
+          * When millis overflows, the pulsetime (millsTimeStamp - pulseTimeStamp + pulseTimeCorrection) 
+          * could ofcause be calculated, but it brings complexity to the code 
           * but only saves one comsumption calculation every 50 days...
           */
         long watt_consumption = 0;
-        if ( metaData[IRQ_PIN_index].pulseTimeStamp > 0 && metaData[IRQ_PIN_index].pulseTimeStamp < millsTimeStamp[IRQ_PIN_index]) { 
+        if ( metaData[IRQ_PIN_index].pulseTimeStamp > 0 && metaData[IRQ_PIN_index].pulseTimeStamp < millsTimeStamp[IRQ_PIN_index])
+        { 
           watt_consumption = round(((float)(60*60*1000) / 
                                 (float)(millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
                                 / (float)interfaceConfig.pulse_per_kWh[IRQ_PIN_index] * 1000);
 
           metaData[IRQ_PIN_index].pulseLength = millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection;
+
         }
 
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Update meterData and publish totals   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         
-        if ( watt_consumption < MAX_COMSUMPTION) {
-          metaData[IRQ_PIN_index].pulseTimeStamp = millsTimeStamp[IRQ_PIN_index];
-          meterData[IRQ_PIN_index].pulseTotal++;
-          meterData[IRQ_PIN_index].pulseSubTotal++;
-          
-          writeMeterData( IRQ_PIN_index);
-          if ( esp32Connected) {
-            publishSensorJson( watt_consumption, IRQ_PIN_index);
-          }
+        metaData[IRQ_PIN_index].pulseTimeStamp = millsTimeStamp[IRQ_PIN_index];
+        meterData[IRQ_PIN_index].pulseTotal++;
+        meterData[IRQ_PIN_index].pulseSubTotal++;
+        
+        writeMeterData( IRQ_PIN_index);
+        if ( esp32Connected) {
+          publishSensorJson( watt_consumption, IRQ_PIN_index);
         }
 
         bitClear(IRQ_PINs_stored, IRQ_PIN_index);                 // Set the bit back to 0, ready for next IRQ 
@@ -711,12 +732,16 @@ void loop() {
   unsigned long timeStamp = millis();
   if ( GlobalIRQ_PIN_index >= PRIVATE_NO_OF_CHANNELS)
     GlobalIRQ_PIN_index = 0;
-  while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS) {
+
+  while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS)
+  {
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
     // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
-    if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 && metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp) {
-      if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp ) {
-        
+    if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 && metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp)
+    {
+      
+      if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp )
+      {
         long watt_consumption = round(((float)(60*60*1000) / 
                                   (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
                                   / (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
@@ -1295,7 +1320,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     */
   
     deserializeJson(doc, payload, length);
-    interfaceConfig.pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
+    if ( doc.containsKey( MQTT_PULSTIME_CORRECTION))
+    {
+      interfaceConfig.pulseTimeCorrection = long(doc[MQTT_PULSTIME_CORRECTION]);
+    }
     writeConfigData();
   }
   else if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET))
@@ -1335,8 +1363,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
 */
 void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)
 {
-  millsTimeStamp[BIT_Reference] = millis();
-  bitSet(IRQ_PINs_stored, BIT_Reference);
+  // Temporary FIX to prevent more than one IQR to be registeret in case more are fired.
+  // This seems to happen if a Risistor-Capasitor is added to reduce noice on IRQ inputs.
+  if (millsTimeStamp[BIT_Reference] + 500 < millis())
+  {
+    millsTimeStamp[BIT_Reference] = millis();
+    bitSet(IRQ_PINs_stored, BIT_Reference);
+  }
 }
 
 /*
