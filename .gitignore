@@ -12,8 +12,8 @@ Firmware/src/privateConfig.h
 
 # temporary excludes
 Hardware/energiRegistrationForHA-backups/*
-Hardware/library/*
-Hardware/library/JLCPCB
+Hardware/library/
+Hardware/JLCPCB/*
 Library/*
 *.pdf
 *.dat
