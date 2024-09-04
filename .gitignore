@@ -7,7 +7,7 @@ Firmware/.vscode/ipch
 Firmware/platformio.ini
 Firmware/src/privateConfig.h
 
-
+.vscode/*
 
 
 # temporary excludes
