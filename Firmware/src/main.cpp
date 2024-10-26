@@ -15,17 +15,19 @@
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
  * EM23 DIN and Type EM111.
  * 
- * The interface will publish data to Home Assistant (HA) and Google sheets.
+ * The interface will publish data to Home Assistant (HA) and Google sheets (GS).
  *
  * The interface will publish kWh (Totals), subtotals and a calculated power consumption to a 
  * MQTT broker for each energy meter.
- * The MQTT topic and payload will be compliant with the Home Assistant (HA) integration
+ * The MQTT topic and payload will be compliant with the (HA) integration
  * MQTT sensor and number integration's.
  * 
  * Subtotals is a periodic count, resat every time ‘true’ is published to the topic: 
  * ‘energy/monitor_ESP32_48E72997D320/subtotal_reset’ at the MQTT broker connected.
+ * or
+ * once every day, as specified in the privateConfig.h file.for when Google sheets are to be updated
  * 
- * Upon reset of subtotals, the interface will publish kWh and subtotals to Google sheets through
+ * Upon reset of subtotals, the interface will publish kWh and subtotals to GS through
  * a HTTPS GET request, using Google sheet’s doGet() function.
  *
  * The Google sheet’s doGet() will add the values passed to the specific sheet.
@@ -37,6 +39,8 @@
  *  }
  * to topic: energy/monitor_ESP32_48E72997D320/<Energy meter number***>/threshold
  * 
+ * Latest status can be seen by publis to topic:
+ * energy/monitor_ESP32_48E72997D320/status
  * LED indications:
  * 
  * 
@@ -47,7 +51,7 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.0.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.1.0"
 
 //#define DEBUG true
 //#define SD_DEBUG true
@@ -59,7 +63,7 @@
  *          Publishing totals, Subtotals and pulscorrections to MQTT has been replaced be write to SD Memory card.
  *  2.0.1   MQTT Reconnect bugfix
  *  2.0.2   serial removed as it is not needed.
- *  3.0.0   Publish data to Google Sheets based on epoch time and time collected from a time server
+ *  3.0.0   Publish data to GS based on epoch time and time collected from a time server
  *  3.0.1   BUGFIX: Interrupt ISR were attached to a non configured pin, which could cause an un-handled IRQ, which then cause infinite loop.
  *  3.1.0   Adding DEBUG compilor switch to investigate SD issue.
  *          -  Code re-arranged to comply with VS Code standard.
@@ -72,6 +76,18 @@
  *          -  Pull up is no longer required, as the new hardware inclcudes hex schmidt-triggers.
  *          -  IRQ's are now tgriggered my a raising pulse.
  *          -  Status LED is lit when GPIO pin is LOW
+ * 4.1.0    BUGFIX:
+ *          - Issue: Stopped updating Google Sheets after power outage. 
+ *            Sketch runs, Values published to MQTT, Sketch handles MQTT requests. Updating GS does not happen!
+ *            - Investigate millis() overrun.
+ *              millis() overrun will cause publsh to GS to stop. Implementing esp_timer_get_time() to return a timestamp in secunds til solve the overrun issue.
+ *              Changed the other usage of millis() as timestamps or changed to code to handle millis() overrun.
+ *          - Issue: PowerUp message only added once
+ *            Changed logic to keep adding PowerUp message until successful call Google Sheets and adding WiFiReconnect message un WiFi reconnect.
+ *          - Response for http.begin(urlFinal.c_str()) cal to GS is collected by httpCode = http.GET() but never tested for success.
+ *            Test response for "200": httpCode = http.GET() = 200
+ *          - Issue: Temporary FIX to prevent more than one IQR to be registeret.
+ *            Temporary fix in function 'void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)' removed after HEX Schmidt triggers are implemented in the hardware
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -130,8 +146,8 @@
  * from then same meter arrives, it will be lost if these calls takes up too much time. Setting a long connect postpone will reduce the loss
  * of pulses
 */
-#define WIFI_CONNECT_POSTPONE 30000     // Number of millis between WiFi connect attempts, when WiFi.begin fails to connect.
-#define MQTT_CONNECT_POSTPONE 30000     // Number of millisecunds between MQTT connect dattempts, when MQTT connect fails to connect.
+#define WIFI_CONNECT_POSTPONE 30        // Number of seconds between WiFi connect attempts, when WiFi.begin fails to connect.
+#define MQTT_CONNECT_POSTPONE 30        // Number of seconds between MQTT connect dattempts, when MQTT connect fails to connect.
 #define BLIP 100                        // Time in milliseconds the LED will blink
 #define MIN_CONSUMPTION 25              // Define the minimum powerconsumption published before publishing 0
                                         // See '>>>    Pulse time check  <<<' in the last part of the loop() for further details.
@@ -203,6 +219,7 @@ String mqttClientWithMac;
 uint16_t blip = BLIP;
 uint8_t GlobalIRQ_PIN_index = 0;
 uint16_t numberOfWrites = 0;
+uint8_t GoogleSheetMessageIndex = 1;  // Setting message in GS to PowerUp
 
 // Define array of GPIO pin numbers used for IRQ.
 const uint8_t channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2_GPIO,private_Metr3_GPIO,private_Metr4_GPIO,
@@ -212,7 +229,6 @@ bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing t
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
 bool LED_Toggled = false; 
 bool LED_Invertred = false;
-bool gsheetUpdated = false;
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -248,8 +264,7 @@ unsigned long WiFiConnectPostpone = 0;  // Millisecunds between each attempt to 
 unsigned long MQTTConnectPostpone = 0;  // Millisecunds between each attempt to connect to MQTT.
 
 unsigned long timeLastCheckedAt;        // Timestamp for when epoch time was checked.
-unsigned long millisToNextTimeCheck;    // Number of millis to next epoch time check.
-
+unsigned long secondsToNextTimeCheck;    // Number of seconds to next epoch time check.
 
 unsigned long LED_toggledAt = 0;        // Timestamp when an IRQ tuggels the LED
 
@@ -274,8 +289,9 @@ void initializeGlobals();
 void publish_sketch_version();
 void publishStatusMessage(String);
 byte getIRQ_PIN_reference(char*);
-void updateGoogleSheets( boolean);
-unsigned long getMillisToNextTimeCheck();
+bool updateGoogleSheets( uint8_t);
+unsigned long getsecondsToNextTimeCheck();
+unsigned long sec();
 void publishMqttEnergyConfigJson( String, String, String, String, u_int8_t);
 void publishMqttConfigurations( uint8_t);
 void publishSensorJson( long, uint8_t);
@@ -304,6 +320,12 @@ void IRAM_ATTR Ext_INT8_ISR();
  * ###################################################################################################
  */
 void setup() {
+/*
+ * To prevent SD Cart failures caused by power interruption during mounting, make a delay to wait
+ * for a steady power supply.
+ */
+  delay( 2000);
+
                                                                                                       #ifdef DEBUG
                                                                                                         Serial.begin( 115200);
                                                                                                         while (!Serial) {
@@ -352,10 +374,7 @@ void setup() {
 
 /*
  * Read configuration and energy meter data from SD memoory
- * To prevent SD Cart failures caused by power interruption during mounting, make a delay to wait
- * for a steady power supply
  */
-  delay( 10000);
                                                                                                       #ifdef DEBUG
                                                                                                         Serial.println("Initialize SD.");
                                                                                                       #endif
@@ -508,7 +527,8 @@ void loop() {
 // >>>>>>>>>>>>>>>>>>>>>>>>   Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 // Ingore WiFi connect if IRQ's are present.
   if ( IRQ_PINs_stored == 0 and \
-       WiFi.status() != WL_CONNECTED and millis() > WiFiConnectAttempt + WiFiConnectPostpone) {
+       WiFi.status() != WL_CONNECTED and sec() > WiFiConnectAttempt + WiFiConnectPostpone)
+  {
 
     /* Turn Build in LED (LED) ON, when not connected to WiFi.
      * The LED is also used as indicator for interrupt activity (Pules registrered). To combine this
@@ -519,7 +539,8 @@ void loop() {
      * on status set by the interrupt activity.
     */
 
-    if (LED_Invertred == false) {
+    if (LED_Invertred == false)
+    {
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Invertred = true;
     }
@@ -528,8 +549,9 @@ void loop() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(PRIVATE_WIFI_SSID.c_str(), PRIVATE_WIFI_PASS.c_str());
 
-    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-      WiFiConnectAttempt = millis();
+    if (WiFi.waitForConnectResult() != WL_CONNECTED)
+    {
+      WiFiConnectAttempt = sec();
       WiFiConnectPostpone = WIFI_CONNECT_POSTPONE;
       blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
@@ -537,15 +559,16 @@ void loop() {
       WiFiConnectAttempt = 0;   // In case WiFi is lost, attempt to reconnect immediatly. 
       WiFiConnectPostpone = 0;
 
-      // Init epoch time
+      // Init Unix epoch time
       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
-      millisToNextTimeCheck = getMillisToNextTimeCheck();
-      timeLastCheckedAt = millis();
-      if (PRIVATE_UPDATE_GOOGLE_SHEET and !gsheetUpdated) {
-        bool AddPowerON = true;
-        gsheetUpdated = true;
-        updateGoogleSheets( AddPowerON);
+      // Init timecheck and post to Google Sheets
+      secondsToNextTimeCheck = getsecondsToNextTimeCheck();
+      timeLastCheckedAt = sec();
+      if (PRIVATE_UPDATE_GOOGLE_SHEET)
+      {
+       if (updateGoogleSheets( GoogleSheetMessageIndex))
+        GoogleSheetMessageIndex = 2;
       }  
 
       /*¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤¤
@@ -566,7 +589,8 @@ void loop() {
       */
 
       ArduinoOTA
-        .onStart([]() {
+        .onStart([]()
+        {
           String type;
           if (ArduinoOTA.getCommand() == U_FLASH)
             type = "sketch";
@@ -576,14 +600,17 @@ void loop() {
           // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
           //  Serial.println("Start updating " + type);                                                      ############################################
         })
-        .onEnd([]() {
+        .onEnd([]()
+        {
           // Serial.println("\nEnd");                                                                         ############################################
         })
-        .onProgress([](unsigned int progress, unsigned int total) {
+        .onProgress([](unsigned int progress, unsigned int total)
+        {
           // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));                                  ############################################
         });
         /*
-        .onError([](ota_error_t error) {
+        .onError([](ota_error_t error)
+        {
           Serial.printf("Error[%u]: ", error);
           if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
           else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -606,9 +633,10 @@ void loop() {
 
 // >>>>>>>>>>>>>>>>>>>>    IF  Connected to WiFi -> Connect to MQTT broker    <<<<<<<<<<<<<<<<<<<<<<<<<
 // Ignore connect to MQTT if IRQ's are present-
-  if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED) {
-
-    if (LED_Invertred == true) {
+  if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED)
+  {
+    if (LED_Invertred == true)
+    {
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Invertred = false;
     }
@@ -616,11 +644,12 @@ void loop() {
     ArduinoOTA.handle();
     
     // >>>>>>>>>>>>>>>>>>> Connect to MQTT Broker <<<<<<<<<<<<<<<<<<<<<<<<<<
-    if (!mqttClient.connected() and millis() > MQTTConnectAttempt + MQTTConnectPostpone ) {
+    if (!mqttClient.connected() and sec() > MQTTConnectAttempt + MQTTConnectPostpone )
+    {
       String will = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
 
-      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False")) {
-
+      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False"))
+      {
         MQTTConnectAttempt = 0;
         MQTTConnectPostpone = 0;
         blip = BLIP;        // Make a short blip (LED Flash) to indicate normal activity.
@@ -644,8 +673,10 @@ void loop() {
 
         mqttClient.publish(will.c_str(), (const uint8_t *)"True", 4, RETAINED);
         
-      } else {
-        MQTTConnectAttempt = millis();
+      }
+      else
+      {
+        MQTTConnectAttempt = sec();
         MQTTConnectPostpone = MQTT_CONNECT_POSTPONE;
         blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
         esp32Connected = false;
@@ -655,7 +686,8 @@ void loop() {
   // >>>>>>>>>>>>>>>>>>>  E N D IF  Connected to WiFi -> Connect to MQTT broker  <<<<<<<<<<<<<<<<<<<<<<<<<<
 
   // >>> Process incomming messages and maintain connection to the server
-  if ( esp32Connected) {
+  if ( esp32Connected)
+  {
     if(!mqttClient.loop()) {
       blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
@@ -664,11 +696,13 @@ void loop() {
   //  <<< END Process incomming messages
 
   // >>>>>>>>>>>>>>>>>>>>   Publis meterData (If any)   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  if ( IRQ_PINs_stored > 0) {                      // If IRQ has occoured IRQ_PINs_store will be > 0.
+  if ( IRQ_PINs_stored > 0)
+  {                                                           // If IRQ has occoured IRQ_PINs_store will be > 0.
     uint8_t pinMask = 0b00000001;                             // Set pinMask to start check if the Least significant Bit (LSB) is set ( = 1)
 
     // >>>>>>>>>>>>>>>>  Tuggle LED pin if not toggled allready  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    if ( !LED_Toggled) {
+    if ( !LED_Toggled)
+    {
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Toggled = true;
       LED_toggledAt = millis();
@@ -740,29 +774,39 @@ void loop() {
   while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS)
   {
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
-    // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
-    if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 && metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp)
+    if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 )
     {
-      
-      if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp )
+      // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
+      if ( metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp)
       {
-        long watt_consumption = round(((float)(60*60*1000) / 
-                                  (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
-                                  / (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
-
-        if ( watt_consumption < MIN_CONSUMPTION) {
-          watt_consumption = 0;
-          metaData[GlobalIRQ_PIN_index].pulseLength = 0;
-        }
+        long watt_consumption = 0;
+        metaData[GlobalIRQ_PIN_index].pulseLength = 0;
         if ( esp32Connected)
           publishSensorJson( -1 * watt_consumption, GlobalIRQ_PIN_index);
+      }
+      else
+      {  
+        if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp )
+        {
+          long watt_consumption = round(((float)(60*60*1000) / 
+                                    (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
+                                    / (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
 
-        metaData[GlobalIRQ_PIN_index].pulseLength *= 2;
+          if ( watt_consumption < MIN_CONSUMPTION) {
+            watt_consumption = 0;
+            metaData[GlobalIRQ_PIN_index].pulseLength = 0;
+          }
+          if ( esp32Connected)
+            publishSensorJson( -1 * watt_consumption, GlobalIRQ_PIN_index);
+
+          metaData[GlobalIRQ_PIN_index].pulseLength *= 2;
+        }
       }
     }
-  /* Tuggle LED Pin if tuggled and BLIP time has passed
-  */
-    if ( LED_Toggled and millis() > LED_toggledAt + blip) {
+    /* Tuggle LED Pin if tuggled and BLIP time has passed or millis() has overrun.
+    */
+    if ( LED_Toggled and ( millis() > LED_toggledAt + blip or millis() < LED_toggledAt)) 
+    {
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Toggled = false;
       LED_toggledAt = 0;
@@ -771,18 +815,21 @@ void loop() {
     GlobalIRQ_PIN_index++;
   }
 
-  /* >>>>>>>>>>>>>>>>>>>>>>>>>>> time check to schecule <<<<<<<<<<<<<<<<<<< */
-  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
-    timeLastCheckedAt = millis();
-    millisToNextTimeCheck = getMillisToNextTimeCheck();
+  /* >>>>>>>>>>>>>>>>>>>>>>>>>>> time check to scheculed Google update <<<<<<<<<<<<<<<<<<< */
+  if (sec() > timeLastCheckedAt + secondsToNextTimeCheck)
+  {
+    timeLastCheckedAt = sec();
+    secondsToNextTimeCheck = getsecondsToNextTimeCheck();
   }
 
-  if ( millisToNextTimeCheck == 0) {
-    millisToNextTimeCheck = 60000; // Postpone a minute to get next millisToNextTimeCheck
-
+  if ( secondsToNextTimeCheck == 0)
+  {
+    secondsToNextTimeCheck = 60; // To prevent another secondsToNextTimeCheck == 0
+                                 // Postpone a minute before getting next secondsToNextTimeCheck 
     if (PRIVATE_UPDATE_GOOGLE_SHEET and WiFi.status() == WL_CONNECTED)
-      updateGoogleSheets( false);
-    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++) {
+      updateGoogleSheets( 0);
+    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+    {
       meterData[ii].pulseSubTotal = 0;
       writeMeterData( ii);
     }
@@ -1010,8 +1057,9 @@ byte getIRQ_PIN_reference(char* topic)
  * https://iotdesignpro.com/articles/esp32-data-logging-to-google-sheets-with-google-scripts
  *  
  */
-void updateGoogleSheets( boolean powerOn)
+bool updateGoogleSheets( uint8_t messageIndex)
 {
+  int httpCode = 0;
   // >>>>>>>>>>>>>   Create data-URL string for HTTP request   <<<<<<<<<<<<<<<<<<
   String urlData = "/exec?meterData=";
 
@@ -1025,29 +1073,34 @@ void updateGoogleSheets( boolean powerOn)
       urlData += String(",");
   }
 
-  if ( powerOn == true)
+  if ( messageIndex == 1)
     urlData += String(",PowerUp");
+  if ( messageIndex == 2)
+    urlData += String(",WiFiReconnect");
+  
 
   // >>>>>>>>>>>>>   Create URL for HTTP request   <<<<<<<<<<<<<<<<<<
   String urlFinal = "https://script.google.com/macros/s/" + PRIVATE_GOOGLE_SCRIPT_ID + urlData;
 
   // >>>>>>>>>>>>>   Make HTTP request to google sheet  <<<<<<<<<<<<<<<<<<
-  if ( PRIVATE_UPDATE_GOOGLE_SHEET)
-  {
-    HTTPClient http;
-    http.begin(urlFinal.c_str());
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  HTTPClient http;
+  http.begin(urlFinal.c_str());
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-    // >>>>>>>>>>>>>   getting response from google sheet  <<<<<<<<<<<<<<<<<<
-    if (int httpCode = http.GET())
-    {
-      String httpMessage = http.getString();
-      String statusMessage = String( String("HTTP Status Code: ") + httpCode + "HTTP Message: " + httpMessage);
-      publishStatusMessage( statusMessage);
-    }
-    //---------------------------------------------------------------------
-    http.end();
+  // >>>>>>>>>>>>>   getting response from google sheet  <<<<<<<<<<<<<<<<<<
+  if ( httpCode = http.GET())
+  {
+    String httpMessage = http.getString();
+    String statusMessage = String( String("HTTP Status Code: ") + httpCode + " HTTP Message: " + httpMessage);
+    publishStatusMessage( statusMessage);
   }
+  //---------------------------------------------------------------------
+  http.end();
+
+  if ( httpCode = 200)
+    return true;
+  else
+    return false;
 }
 /* ###################################################################################################
  *          G E T   M I L L I S   T O   N E X T    T I M E   C H E C K
@@ -1058,11 +1111,11 @@ void updateGoogleSheets( boolean powerOn)
  * #define SCHEDULE_MINUTE  mm
  * #define SCHEDULE_HOUR  hh
  * 
- * getMillisToNextTimeCheck() will return the number om millis() diveded by two, counted from the time 
+ * getsecondsToNextTimeCheck() will return the number om sec() diveded by two, counted from the time 
  * it is called to the time defined.
  * Doing it this way reduce the number of calls to the timeserver.
  * 
- * getMillisToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
+ * getsecondsToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
  * 
  * Usage:
  * #include "time.h"
@@ -1076,24 +1129,24 @@ void updateGoogleSheets( boolean powerOn)
  * 
  * 
  * setup() {
- *   timeLastCheckedAt = millis();
- *   millisToNextTimeCheck = getMillisToNextTimeCheck();
+ *   timeLastCheckedAt = sec();
+ *   secondsToNextTimeCheck = getsecondsToNextTimeCheck();
  * }
  * 
  * loop() {
- *  if (millis() > timeLastCheckedAt + millisToNextTimeCheck){
- *    timeLastCheckedAt = millis();
- *    millisToNextTimeCheck = getMillisToNextTimeCheck();
+ *  if (sec() > timeLastCheckedAt + secondsToNextTimeCheck){
+ *    timeLastCheckedAt = sec();
+ *    secondsToNextTimeCheck = getsecondsToNextTimeCheck();
  *  }
- *  if ( millisToNextTimeCheck == 0 ) {
- *    millisToNextTimeCheck = 60000  // Snooze one minute to avoid calls within the same minute
+ *  if ( secondsToNextTimeCheck == 0 ) {
+ *    secondsToNextTimeCheck = 60  // Snooze one minute to avoid multible calls within the same minute
  *     
  *     * Code to be executred
  *      
  *   }
  * 
  */
-unsigned long getMillisToNextTimeCheck()
+unsigned long getsecondsToNextTimeCheck()
 {
   unsigned long timeToNextTimecheckInSeconcs;
   struct tm timeinfo;
@@ -1118,11 +1171,64 @@ unsigned long getMillisToNextTimeCheck()
     }
     timeToNextTimecheckInSeconcs = ((((sc_hour * 60 * 60) + (sc_min * 60) + dogn) - ((timeinfo.tm_hour * 60 * 60) +\
                                    (timeinfo.tm_min * 60) + timeinfo.tm_sec)) /
-                                   2) *1000 + 30000;
+                                   2)  + 15;
   }
 
   return timeToNextTimecheckInSeconcs;
 }
+
+/*
+ * ###################################################################################################
+ *              S E C   -   S Y S T E M T I M E    I N   S E C U N D S
+ * ###################################################################################################
+ * 
+ * sec()
+ * 
+ * [Time]
+ *
+ * Description
+ * 
+ * Returns the number of secunds passed since the board began running the current program. 
+ * This number will overflow (go back to zero), after approximately 136 years.
+ * 
+ * Syntax
+ * 
+ * time = millis()
+ * 
+ * Parameters
+ * 
+ * None
+ * 
+ * Returns
+ * 
+ * Number of seconds passed since the program started. Data type: unsigned long.
+ * 
+ * NOTE: The function is based on the ESP Timer (High Resolution Timer), the function esp_timer_get_time() returns a 64 bit value in microseconds.
+ * 
+ * 
+ * Example Code
+ * This example code prints on the serial port the number of seconds passed since the board started running the code itself.
+ unsigned long myTime;
+ 
+void setup() {
+  Serial.begin(9600);
+}
+void loop() {
+  Serial.print("Time: ");
+  myTime = sec();
+
+  Serial.println(myTime); // prints time since program started
+  delay(1000);          // wait a second so as not to send massive amounts of data
+}
+ *
+ */
+unsigned long sec()
+{
+  int64_t m = esp_timer_get_time();
+  unsigned long s = m / 1000000;
+  return s;
+}
+
 /*
  * ###################################################################################################
  *              P U B L I S H   M Q T T   E N E R G Y   C O N F I G U R A T I O N
@@ -1332,13 +1438,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
   }
   else if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET))
   {
-    /* Publish totals, subtotals to google sheets and reset subtotals. Done by
+    /* Publish totals, subtotals to GS and reset subtotals. Done by
     * Publish: true
     * To topic: energy/monitor_ESP32_48E72997D320/subtotal_reset
     */
     
     if (PRIVATE_UPDATE_GOOGLE_SHEET)
-      updateGoogleSheets( false);
+      updateGoogleSheets( 0);
     for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
     {
       meterData[ii].pulseSubTotal = 0;
@@ -1367,13 +1473,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
 */
 void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)
 {
-  // Temporary FIX to prevent more than one IQR to be registeret in case more are fired.
-  // This seems to happen if a Risistor-Capasitor is added to reduce noice on IRQ inputs.
-  if (millsTimeStamp[BIT_Reference] + 500 < millis())
-  {
-    millsTimeStamp[BIT_Reference] = millis();
-    bitSet(IRQ_PINs_stored, BIT_Reference);
-  }
+  millsTimeStamp[BIT_Reference] = millis();
+  bitSet(IRQ_PINs_stored, BIT_Reference);
 }
 
 /*
