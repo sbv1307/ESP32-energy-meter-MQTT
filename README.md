@@ -16,6 +16,9 @@ energy/monitor_ESP32_48E72997D320/subtotal_reset
 ````
 at the MQTT broker connected.
 
+The interface will publish kWh (Totals), subtotals to Google Sheets at the time defined by 
+SCHEDULE_MINUTE and SCHEDULE_HOUR.
+
 Upon reset of subtotals, the interface will publish kWh and subtotals to Google sheets through
 a HTTPS GET request, using Google sheet’s doGet() function.
 
@@ -32,6 +35,17 @@ Publishing Payload:
 to topic: 
 ````bash
 energy/monitor_ESP32_48E72997D320/<Energy meter number***>/threshold
+````
+
+Then latest status message (e.g. the return message from the call to Google sheets) can be collectged
+by subscribing to topic:
+````bash
+energy/monitor_ESP32_48E72997D320/status
+````
+
+To get information about the current running version, subscribe to topic:
+````bash
+energy/monitor_ESP32_48E72997D320/sketch_version
 ````
 
 ** **pulse-counts** in the number of pulses counted by the energy meter. It is calculated by the kWh,
