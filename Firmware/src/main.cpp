@@ -1193,7 +1193,7 @@ unsigned long getsecondsToNextTimeCheck()
  * 
  * Syntax
  * 
- * time = millis()
+ * time = sec()
  * 
  * Parameters
  * 
@@ -1208,7 +1208,9 @@ unsigned long getsecondsToNextTimeCheck()
  * 
  * Example Code
  * This example code prints on the serial port the number of seconds passed since the board started running the code itself.
+ 
  unsigned long myTime;
+ unsigned long sec();
  
 void setup() {
   Serial.begin(9600);
