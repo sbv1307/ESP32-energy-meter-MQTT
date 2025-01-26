@@ -11,6 +11,8 @@
 #include "SPI.h"
 #include "time.h"
 
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - DB4.1.1"
+
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
  * EM23 DIN and Type EM111.
@@ -51,11 +53,6 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.1.0"
-
-//#define DEBUG true
-//#define SD_DEBUG true
-
 /* Version history:
  *  1.0.0   Initial production version.
  *  2.0.0   Using MQTT broker as a storage for configuration data and energy meter counts, read/write from/to SD memory card has been implemnted.
@@ -88,6 +85,9 @@
  *            Test response for "200": httpCode = http.GET() = 200
  *          - Issue: Temporary FIX to prevent more than one IQR to be registeret.
  *            Temporary fix in function 'void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)' removed after HEX Schmidt triggers are implemented in the hardware
+ * 4.1.1    BUGFIX:
+ *         - Issue: Not all Home Assistant (HA) configurations are published. #8
+ *         - Issue: "Forbrug" is published as 0 (zero) #9
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -140,6 +140,15 @@
  * ######################################################################################################################################
  * ######################################################################################################################################
  */
+
+/*
+#define DEBUG true
+#define LED_DEBUG true
+#define SD_DEBUG true
+#define WiFi_DEBUG true
+#define MQTT_DEBUG true
+*/
+
 #define CONFIGURATON_VERSION 4
 /* WiFi and MQTT connect attempt issues. 
  * IRQ's will be registrated, but the counters for will not be updated during the calls to WiFi and MQTT connect. If more than one pulse
@@ -227,7 +236,7 @@ const uint8_t channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2
 
 bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing the configuration to HA if required.
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
-bool LED_Toggled = false; 
+bool LED_ToggledState = false; 
 bool LED_Invertred = false;
 
 WiFiClient wifiClient;
@@ -506,11 +515,11 @@ void setup() {
                                                                                                         Serial.println( "Done!");
                                                                                                         breakpoint();
                                                                                                       #endif
+  digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
                                                                                                       #ifdef DEBUG
-                                                                                                        Serial.println("SD Initialized.");
+                                                                                                        Serial.println("SD Initialized. Continue to loop.");
                                                                                                         breakpoint();
                                                                                                       #endif
-  digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
 }
 
 /*
@@ -538,9 +547,16 @@ void loop() {
      * SO: In order to turn the led ON when not connectged to WiFi, the LED has to be se ON or Off depending
      * on status set by the interrupt activity.
     */
+                                                                                                      #ifdef WiFi_DEBUG
+                                                                                                        Serial.println("Attempting to connect to WiFi.");
+                                                                                                      #endif
 
     if (LED_Invertred == false)
     {
+                                                                                                      #ifdef LED_DEBUG
+                                                                                                        Serial.println("Invert LED (Turn ON LED).");
+                                                                                                        breakpoint();
+                                                                                                      #endif
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Invertred = true;
     }
@@ -551,11 +567,20 @@ void loop() {
 
     if (WiFi.waitForConnectResult() != WL_CONNECTED)
     {
+                                                                                                      #ifdef WiFi_DEBUG
+                                                                                                        Serial.println("Failed to connected to WiFi.");
+                                                                                                        Serial.println("Tried SSID: " + PRIVATE_WIFI_SSID + " with password: " + PRIVATE_WIFI_PASS);
+                                                                                                        Serial.println("Will try again in: " + String(WIFI_CONNECT_POSTPONE) + " Secunds");
+                                                                                                      #endif
       WiFiConnectAttempt = sec();
       WiFiConnectPostpone = WIFI_CONNECT_POSTPONE;
       blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
       esp32Connected = false;
     } else {
+                                                                                                      #ifdef WiFi_DEBUG
+                                                                                                        Serial.println("Successfully connected to WiFi.");
+                                                                                                        Serial.println("SSID: " + PRIVATE_WIFI_SSID);
+                                                                                                      #endif
       WiFiConnectAttempt = 0;   // In case WiFi is lost, attempt to reconnect immediatly. 
       WiFiConnectPostpone = 0;
 
@@ -631,12 +656,16 @@ void loop() {
   }
 // >>>>>>>>>>>>>>>>>>>>>>>>   E N D  Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-// >>>>>>>>>>>>>>>>>>>>    IF  Connected to WiFi -> Connect to MQTT broker    <<<<<<<<<<<<<<<<<<<<<<<<<
+// >>>>>>>>>>>>>>>>>>>>   Connect to MQTT broker IF  Connected to WiFi   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 // Ignore connect to MQTT if IRQ's are present-
   if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED)
   {
     if (LED_Invertred == true)
     {
+                                                                                                      #ifdef LED_DEBUG
+                                                                                                        Serial.println("LED inverted (Turn OFF LED).");
+                                                                                                        breakpoint();
+                                                                                                      #endif
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
       LED_Invertred = false;
     }
@@ -646,10 +675,19 @@ void loop() {
     // >>>>>>>>>>>>>>>>>>> Connect to MQTT Broker <<<<<<<<<<<<<<<<<<<<<<<<<<
     if (!mqttClient.connected() and sec() > MQTTConnectAttempt + MQTTConnectPostpone )
     {
+                                                                                                      #ifdef MQTT_DEBUG
+                                                                                                        Serial.print("Attempting to connect to MQTT broker.... ");
+                                                                                                      #endif
+
+
       String will = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
 
       if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False"))
       {
+                                                                                                      #ifdef MQTT_DEBUG
+                                                                                                        Serial.println("Successfull connected.");
+                                                                                                      #endif
+
         MQTTConnectAttempt = 0;
         MQTTConnectPostpone = 0;
         blip = BLIP;        // Make a short blip (LED Flash) to indicate normal activity.
@@ -676,6 +714,10 @@ void loop() {
       }
       else
       {
+                                                                                                      #ifdef MQTT_DEBUG
+                                                                                                        Serial.println("Failed to connected.");
+                                                                                                      #endif
+
         MQTTConnectAttempt = sec();
         MQTTConnectPostpone = MQTT_CONNECT_POSTPONE;
         blip = 10 * BLIP;        // Make a long blip (LED Flash) to indicate no connection to MQTT broker
@@ -683,7 +725,7 @@ void loop() {
       }
     }
   }
-  // >>>>>>>>>>>>>>>>>>>  E N D IF  Connected to WiFi -> Connect to MQTT broker  <<<<<<<<<<<<<<<<<<<<<<<<<<
+  // >>>>>>>>>>>>>>>>>>>  E N D    Connect to MQTT broker IF  Connected to WiFi <<<<<<<<<<<<<<<<<<<<<<<<<<
 
   // >>> Process incomming messages and maintain connection to the server
   if ( esp32Connected)
@@ -701,25 +743,30 @@ void loop() {
     uint8_t pinMask = 0b00000001;                             // Set pinMask to start check if the Least significant Bit (LSB) is set ( = 1)
 
     // >>>>>>>>>>>>>>>>  Tuggle LED pin if not toggled allready  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    if ( !LED_Toggled)
+    if ( !LED_ToggledState)
     {
-      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-      LED_Toggled = true;
+                                                                                                     #ifdef LED_DEBUG
+                                                                                                        Serial.println("IRQ PINs: " + String(IRQ_PINs_stored, BIN));
+                                                                                                        Serial.println("LED Tuggeled OFF -> Tuggle LED ON");
+                                                                                                      #endif
+       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+      LED_ToggledState = true;
       LED_toggledAt = millis();
     }
 
     // Iterate through all bits in the byte IRQ_PINs_stored.
     for( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
     {
+      // Publish configuration to MQTT broker if not allready done.
+      if( esp32Connected and !configurationPublished[IRQ_PIN_index])
+      {
+        publishMqttConfigurations( IRQ_PIN_index);
+      }
       /*
         *  If bit in IRQ_PINs_stored matches the bit set in pinMask: Calculate powerconsumption and publist data.
         */
       if( IRQ_PINs_stored & pinMask)                       // If bit is set 
       {
-        if( esp32Connected and !configurationPublished[IRQ_PIN_index])
-        {
-          publishMqttConfigurations( IRQ_PIN_index);
-        }
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Calculate power comsumption   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         /*
           * It does not make sence to calculate consumption when the privious pulse is unkown (0) or 
@@ -773,11 +820,17 @@ void loop() {
 
   while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS)
   {
+    // Publish configuration to MQTT broker if not allready done.
+    if( esp32Connected and !configurationPublished[GlobalIRQ_PIN_index])
+    {
+      publishMqttConfigurations( GlobalIRQ_PIN_index);
+    }
+
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
     if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 )
     {
       // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
-      if ( metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp)
+      if ( metaData[GlobalIRQ_PIN_index].pulseTimeStamp > timeStamp)
       {
         long watt_consumption = 0;
         metaData[GlobalIRQ_PIN_index].pulseLength = 0;
@@ -805,11 +858,21 @@ void loop() {
     }
     /* Tuggle LED Pin if tuggled and BLIP time has passed or millis() has overrun.
     */
-    if ( LED_Toggled and ( millis() > LED_toggledAt + blip or millis() < LED_toggledAt)) 
+    if ( LED_ToggledState )
     {
-      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-      LED_Toggled = false;
-      LED_toggledAt = 0;
+                                                                                                      #ifdef LED_DEBUG
+                                                                                                        Serial.println("LED Tuggeled ON.");
+                                                                                                      #endif
+      if ( millis() < LED_toggledAt + blip or millis() < LED_toggledAt)
+      {
+                                                                                                      #ifdef LED_DEBUG
+                                                                                                        Serial.println("Tuggle LED (Turn OFF LED).");
+                                                                                                        breakpoint();
+                                                                                                      #endif
+        digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+        LED_ToggledState = false;
+        LED_toggledAt = 0;
+      }
     }
 
     GlobalIRQ_PIN_index++;
@@ -873,13 +936,13 @@ void indicateError( uint8_t errorNumber)
 void writeConfigData()
 {
   String configFilename = String(CONFIGURATION_FILENAME);
-                                                                                                      #ifdef DEBUG
+                                                                                                      #ifdef SD_DEBUG
                                                                                                         Serial.println("Open config file for writing");
                                                                                                       #endif
   File structFile = SD.open(configFilename, FILE_WRITE);
   if (!structFile)
     indicateError(2);
-                                                                                                      #ifdef DEBUG
+                                                                                                      #ifdef SD_DEBUG
                                                                                                         Serial.println("Successfull opened");
                                                                                                       #endif
   structFile.seek(0);
@@ -893,7 +956,7 @@ void writeConfigData()
 void writeMeterDataFile( uint8_t datafileNumber)
 {
   String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
-                                                                                                      #ifdef DEBUG
+                                                                                                      #ifdef SD_DEBUG
                                                                                                         Serial.print("Open datafile: ");
                                                                                                         Serial.print( filename);
                                                                                                         Serial.print(". for writing...");
@@ -901,12 +964,12 @@ void writeMeterDataFile( uint8_t datafileNumber)
   File structFile = SD.open(filename, FILE_WRITE);
   if (!structFile)
   {
-                                                                                                      #ifdef DEBUG
+                                                                                                      #ifdef SD_DEBUG
                                                                                                         Serial.println("FAILED!");
                                                                                                       #endif
     indicateError(3);
   }
-                                                                                                        #ifdef DEBUG
+                                                                                                        #ifdef SD_DEBUG
                                                                                                         Serial.println("Successful.");
                                                                                                       #endif
 
