@@ -11,6 +11,8 @@
 #include "SPI.h"
 #include "time.h"
 
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.1.1"
+
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
  * EM23 DIN and Type EM111.
@@ -51,11 +53,6 @@
  * The relation between energy meter and channel number is defined in the privateConfig.h file. 
  */ 
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.1.0"
-
-//#define DEBUG true
-//#define SD_DEBUG true
-
 /* Version history:
  *  1.0.0   Initial production version.
  *  2.0.0   Using MQTT broker as a storage for configuration data and energy meter counts, read/write from/to SD memory card has been implemnted.
@@ -88,6 +85,9 @@
  *            Test response for "200": httpCode = http.GET() = 200
  *          - Issue: Temporary FIX to prevent more than one IQR to be registeret.
  *            Temporary fix in function 'void IRAM_ATTR store_IRQ_PIN(u_int8_t BIT_Reference)' removed after HEX Schmidt triggers are implemented in the hardware
+ * 4.1.1    BUGFIX:
+ *         - Issue: Not all Home Assistant (HA) configurations are published. #8
+ *         - Issue: "Forbrug" is published as 0 (zero) #9
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -140,6 +140,8 @@
  * ######################################################################################################################################
  * ######################################################################################################################################
  */
+
+
 #define CONFIGURATON_VERSION 4
 /* WiFi and MQTT connect attempt issues. 
  * IRQ's will be registrated, but the counters for will not be updated during the calls to WiFi and MQTT connect. If more than one pulse
@@ -227,7 +229,7 @@ const uint8_t channelPin[MAX_NO_OF_CHANNELS] = {private_Metr1_GPIO,private_Metr2
 
 bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing the configuration to HA if required.
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
-bool LED_Toggled = false; 
+bool LED_ToggledState = false; 
 bool LED_Invertred = false;
 
 WiFiClient wifiClient;
@@ -305,11 +307,6 @@ void IRAM_ATTR Ext_INT5_ISR();
 void IRAM_ATTR Ext_INT6_ISR();
 void IRAM_ATTR Ext_INT7_ISR();
 void IRAM_ATTR Ext_INT8_ISR();
-
-                                                                                                      #ifdef DEBUG
-                                                                                                        void breakpoint();
-                                                                                                        void printDirectory( File, int);
-                                                                                                      #endif
 /*
  * ###################################################################################################
  * ###################################################################################################
@@ -326,20 +323,6 @@ void setup() {
  */
   delay( 2000);
 
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.begin( 115200);
-                                                                                                        while (!Serial) {
-                                                                                                          ;  // Wait for serial connectionsbefore proceeding
-                                                                                                        }
-                                                                                                        Serial.println(SKETCH_VERSION);
-                                                                                                        Serial.println("Hit [Enter] to start!");
-                                                                                                        while (!Serial.available()) {
-                                                                                                          ;  // In order to prevent unattended execution, wait for [Enter].
-                                                                                                        }
-                                                                                                        while (Serial.available()) {
-                                                                                                          char c = Serial.read();  // Empty input buffer.
-                                                                                                        }
-                                                                                                      #endif
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, LOW);          // Turn ON LED to indicate startup
 
@@ -375,42 +358,17 @@ void setup() {
 /*
  * Read configuration and energy meter data from SD memoory
  */
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("Initialize SD.");
-                                                                                                      #endif
   if(!SD.begin(5))
   {
     indicateError(1);
   }
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println("Files on SD Card: ");
-                                                                                                        File root;
-                                                                                                        root = SD.open("/");
-                                                                                                        printDirectory( root, 0);
-                                                                                                        root.close();
-                                                                                                        Serial.println( "Done!");
-                                                                                                        breakpoint();
-                                                                                                      #endif
-
   // Reading configuration 
   String configFilename = String(CONFIGURATION_FILENAME);
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.print("Open configuration file: ");
-                                                                                                        Serial.println( configFilename);
-                                                                                                      #endif
   File structFile = SD.open(configFilename, FILE_READ);
   if ( structFile)
   {
     structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
     structFile.close();
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.print("Configuration file read. Structure version: ");
-                                                                                                        Serial.println( interfaceConfig.structureVersion);
-                                                                                                        Serial.print("Current version: ");
-                                                                                                        Serial.println( (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS);
-                                                                                                        Serial.print("Datafile set number: ");
-                                                                                                        Serial.println( interfaceConfig.dataFileSetNumber);
-                                                                                                      #endif
   }
 
   // Check if new configuration and datafiles are required
@@ -425,39 +383,22 @@ void setup() {
   {
     String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) +\
                               FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.print("Attempt to open datafile: ");
-                                                                                                        Serial.print( filename);
-                                                                                                      #endif
     structFile = SD.open(filename, FILE_READ);
     if ( structFile) {
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println(". Succeeded.");
-                                                                                                        Serial.print("Attempt to read datafile.");
-                                                                                                      #endif
       if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
           sizeof(meterData[ii])/sizeof(uint8_t))
       {
          numberOfDatafilesRead++;
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println(". Succeeded.");
-                                                                                                      #endif
       } 
       else
       {
         meterData[ii].pulseTotal = 0;
         meterData[ii].pulseSubTotal = 0;
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println(". Failed.");
-                                                                                                      #endif
       }
       structFile.close();
     }
     else
     {
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println(". Failed.");
-                                                                                                      #endif
       meterData[ii].pulseTotal = 0;
       meterData[ii].pulseSubTotal = 0;
     }
@@ -467,30 +408,12 @@ void setup() {
   if (numberOfDatafilesRead > 0)
   {
     interfaceConfig.dataFileSetNumber++;
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println("Creating new dataset.");
-                                                                                                      #endif
   }
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        else
-                                                                                                        {
-                                                                                                          Serial.println("Reuse existing dataset.");
-                                                                                                        }
-                                                                                                        
-                                                                                                      #endif
   writeConfigData();
   // Create directory for data file set.
   String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.print("Creating direectory: ");
-                                                                                                        Serial.println( dirname);
-                                                                                                      #endif
   if ( !SD.mkdir( dirname))
   {
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.print("FAILED to create direectory: ");
-                                                                                                        Serial.println( dirname);
-                                                                                                      #endif
     indicateError(4);
   }
 
@@ -498,18 +421,6 @@ void setup() {
   {
     writeMeterData( ii);
   }
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        Serial.println("Files on SD Card: ");
-                                                                                                        root = SD.open("/");
-                                                                                                        printDirectory( root, 0);
-                                                                                                        root.close();
-                                                                                                        Serial.println( "Done!");
-                                                                                                        breakpoint();
-                                                                                                      #endif
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("SD Initialized.");
-                                                                                                        breakpoint();
-                                                                                                      #endif
   digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
 }
 
@@ -538,7 +449,6 @@ void loop() {
      * SO: In order to turn the led ON when not connectged to WiFi, the LED has to be se ON or Off depending
      * on status set by the interrupt activity.
     */
-
     if (LED_Invertred == false)
     {
       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
@@ -631,7 +541,7 @@ void loop() {
   }
 // >>>>>>>>>>>>>>>>>>>>>>>>   E N D  Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-// >>>>>>>>>>>>>>>>>>>>    IF  Connected to WiFi -> Connect to MQTT broker    <<<<<<<<<<<<<<<<<<<<<<<<<
+// >>>>>>>>>>>>>>>>>>>>   Connect to MQTT broker IF  Connected to WiFi   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 // Ignore connect to MQTT if IRQ's are present-
   if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED)
   {
@@ -683,7 +593,7 @@ void loop() {
       }
     }
   }
-  // >>>>>>>>>>>>>>>>>>>  E N D IF  Connected to WiFi -> Connect to MQTT broker  <<<<<<<<<<<<<<<<<<<<<<<<<<
+  // >>>>>>>>>>>>>>>>>>>  E N D    Connect to MQTT broker IF  Connected to WiFi <<<<<<<<<<<<<<<<<<<<<<<<<<
 
   // >>> Process incomming messages and maintain connection to the server
   if ( esp32Connected)
@@ -701,25 +611,26 @@ void loop() {
     uint8_t pinMask = 0b00000001;                             // Set pinMask to start check if the Least significant Bit (LSB) is set ( = 1)
 
     // >>>>>>>>>>>>>>>>  Tuggle LED pin if not toggled allready  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    if ( !LED_Toggled)
+    if ( !LED_ToggledState)
     {
-      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-      LED_Toggled = true;
+       digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+      LED_ToggledState = true;
       LED_toggledAt = millis();
     }
 
     // Iterate through all bits in the byte IRQ_PINs_stored.
     for( uint8_t IRQ_PIN_index = 0; IRQ_PIN_index < PRIVATE_NO_OF_CHANNELS; IRQ_PIN_index++)
     {
+      // Publish configuration to MQTT broker if not allready done.
+      if( esp32Connected and !configurationPublished[IRQ_PIN_index])
+      {
+        publishMqttConfigurations( IRQ_PIN_index);
+      }
       /*
         *  If bit in IRQ_PINs_stored matches the bit set in pinMask: Calculate powerconsumption and publist data.
         */
       if( IRQ_PINs_stored & pinMask)                       // If bit is set 
       {
-        if( esp32Connected and !configurationPublished[IRQ_PIN_index])
-        {
-          publishMqttConfigurations( IRQ_PIN_index);
-        }
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Calculate power comsumption   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         /*
           * It does not make sence to calculate consumption when the privious pulse is unkown (0) or 
@@ -773,11 +684,17 @@ void loop() {
 
   while ( IRQ_PINs_stored == 0 && GlobalIRQ_PIN_index < PRIVATE_NO_OF_CHANNELS)
   {
+    // Publish configuration to MQTT broker if not allready done.
+    if( esp32Connected and !configurationPublished[GlobalIRQ_PIN_index])
+    {
+      publishMqttConfigurations( GlobalIRQ_PIN_index);
+    }
+
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
     if ( metaData[GlobalIRQ_PIN_index].pulseLength > 0 )
     {
       // During exeution mills will overflow ==> Complicates calculation ==> Skip recalculation
-      if ( metaData[GlobalIRQ_PIN_index].pulseTimeStamp < timeStamp)
+      if ( metaData[GlobalIRQ_PIN_index].pulseTimeStamp > timeStamp)
       {
         long watt_consumption = 0;
         metaData[GlobalIRQ_PIN_index].pulseLength = 0;
@@ -805,11 +722,14 @@ void loop() {
     }
     /* Tuggle LED Pin if tuggled and BLIP time has passed or millis() has overrun.
     */
-    if ( LED_Toggled and ( millis() > LED_toggledAt + blip or millis() < LED_toggledAt)) 
+    if ( LED_ToggledState )
     {
-      digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
-      LED_Toggled = false;
-      LED_toggledAt = 0;
+      if ( millis() < LED_toggledAt + blip or millis() < LED_toggledAt)
+      {
+        digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
+        LED_ToggledState = false;
+        LED_toggledAt = 0;
+      }
     }
 
     GlobalIRQ_PIN_index++;
@@ -850,9 +770,6 @@ void loop() {
  */
 void indicateError( uint8_t errorNumber)
 {
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("Error indication called.");
-                                                                                                      #endif
   digitalWrite(LED_BUILTIN, LOW);
   while (true)
   {
@@ -873,15 +790,9 @@ void indicateError( uint8_t errorNumber)
 void writeConfigData()
 {
   String configFilename = String(CONFIGURATION_FILENAME);
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("Open config file for writing");
-                                                                                                      #endif
   File structFile = SD.open(configFilename, FILE_WRITE);
   if (!structFile)
     indicateError(2);
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("Successfull opened");
-                                                                                                      #endif
   structFile.seek(0);
   structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig));
   structFile.close();
@@ -893,23 +804,11 @@ void writeConfigData()
 void writeMeterDataFile( uint8_t datafileNumber)
 {
   String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.print("Open datafile: ");
-                                                                                                        Serial.print( filename);
-                                                                                                        Serial.print(". for writing...");
-                                                                                                      #endif
   File structFile = SD.open(filename, FILE_WRITE);
   if (!structFile)
   {
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.println("FAILED!");
-                                                                                                      #endif
     indicateError(3);
   }
-                                                                                                        #ifdef DEBUG
-                                                                                                        Serial.println("Successful.");
-                                                                                                      #endif
-
   structFile.seek(0);
   structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber]));
   structFile.close(); 
@@ -1518,56 +1417,3 @@ void IRAM_ATTR Ext_INT8_ISR()
 {
   store_IRQ_PIN( 7);
 }
-
-
-                                                                                                      #ifdef DEBUG
-                                                                                                        void breakpoint()
-                                                                                                        {
-                                                                                                          while (Serial.available())
-                                                                                                          {
-                                                                                                            char c = Serial.read();  // Empty input buffer.
-                                                                                                          }
-                                                                                                          Serial.println("Enter any character and hit [Enter] to contiue!");
-                                                                                                          while (!Serial.available())
-                                                                                                          {
-                                                                                                            ;  // In order to prevent unattended execution, wait for [Enter].
-                                                                                                          }
-                                                                                                          while (Serial.available())
-                                                                                                          {
-                                                                                                            char c = Serial.read();  // Empty input buffer.
-                                                                                                          }
-
-                                                                                                        }
-
-                                                                                                      #endif
-
-                                                                                                      #ifdef SD_DEBUG
-                                                                                                        void printDirectory( File dir, int numTabs)
-                                                                                                        {
-                                                                                                          while (true)
-                                                                                                          {
-                                                                                                            File entry =  dir.openNextFile();
-                                                                                                            if (! entry)
-                                                                                                            {
-                                                                                                              // no more files
-                                                                                                              break;
-                                                                                                            }
-                                                                                                            for (uint8_t i = 0; i < numTabs; i++) {
-                                                                                                              Serial.print('\t');
-                                                                                                            }
-                                                                                                            Serial.print(entry.name());
-                                                                                                            if (entry.isDirectory())
-                                                                                                            {
-                                                                                                              Serial.println("/");
-                                                                                                              printDirectory(entry, numTabs + 1);
-                                                                                                            }
-                                                                                                            else
-                                                                                                            {
-                                                                                                              // files have sizes, directories do not
-                                                                                                              Serial.print("\t\t");
-                                                                                                              Serial.println(entry.size(), DEC);
-                                                                                                            }
-                                                                                                            entry.close();
-                                                                                                          }
-                                                                                                        }
-                                                                                                      #endif
