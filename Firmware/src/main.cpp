@@ -11,7 +11,7 @@
 #include "SPI.h"
 #include "time.h"
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - DB4.2.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.2.0"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -229,6 +229,7 @@ String errorMessages[] = {
                          };
 
 int errorIndex = 0;
+int previousErrorIndex = 0;
               
 
 uint16_t blip = BLIP;
@@ -320,10 +321,6 @@ void IRAM_ATTR Ext_INT5_ISR();
 void IRAM_ATTR Ext_INT6_ISR();
 void IRAM_ATTR Ext_INT7_ISR();
 void IRAM_ATTR Ext_INT8_ISR();
-                                                                                                      #ifdef DEBUG
-                                                                                                        void breakpoint();
-                                                                                                        void printDirectory( File, int);
-                                                                                                      #endif
 /*
  * ###################################################################################################
  * ###################################################################################################
@@ -340,20 +337,6 @@ void setup() {
  */
   delay( 2000);
 
-                                                                                                      #ifdef DEBUG
-                                                                                                        Serial.begin( 115200);
-                                                                                                        while (!Serial) {
-                                                                                                          ;  // Wait for serial connectionsbefore proceeding
-                                                                                                        }
-                                                                                                        Serial.println(SKETCH_VERSION);
-                                                                                                        Serial.println("Hit [Enter] to start!");
-                                                                                                        while (!Serial.available()) {
-                                                                                                          ;  // In order to prevent unattended execution, wait for [Enter].
-                                                                                                        }
-                                                                                                        while (Serial.available()) {
-                                                                                                          char c = Serial.read();  // Empty input buffer.
-                                                                                                        }
-                                                                                                      #endif                                                                                                     
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, LOW);          // Turn ON LED to indicate startup
 
@@ -449,7 +432,6 @@ void setup() {
   {
     SD_Failed = true;
     bitSet(errorIndex, 1);
-    publish_sketch_version();
   }
 
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
@@ -471,10 +453,10 @@ void setup() {
  * ###################################################################################################
  * ###################################################################################################
  */
-void loop() {
-
-// >>>>>>>>>>>>>>>>>>>>>>>>   Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-// Ingore WiFi connect if IRQ's are present.
+void loop() 
+{
+  // >>>>>>>>>>>>>>>>>>>>>>>>   Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  // Ingore WiFi connect if IRQ's are present.
   if ( IRQ_PINs_stored == 0 and \
        WiFi.status() != WL_CONNECTED and sec() > WiFiConnectAttempt + WiFiConnectPostpone)
   {
@@ -577,10 +559,10 @@ void loop() {
 
     }
   }
-// >>>>>>>>>>>>>>>>>>>>>>>>   E N D  Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  // >>>>>>>>>>>>>>>>>>>>>>>>   E N D  Connect to WiFi if not connected    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-// >>>>>>>>>>>>>>>>>>>>   Connect to MQTT broker IF  Connected to WiFi   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-// Ignore connect to MQTT if IRQ's are present-
+  // >>>>>>>>>>>>>>>>>>>>   Connect to MQTT broker IF  Connected to WiFi   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  // Ignore connect to MQTT if IRQ's are present-
   if ( IRQ_PINs_stored == 0 and WiFi.status() == WL_CONNECTED)
   {
     if (LED_Invertred == true)
@@ -707,7 +689,8 @@ void loop() {
         bitClear(IRQ_PINs_stored, IRQ_PIN_index);                 // Set the bit back to 0, ready for next IRQ 
       } 
       pinMask <<= 1;                                              // Left shift the bit mask to check the next bit
-    }  
+    }
+
   }
 
   /* >>>>>>>>>>>>>>>>>>    Pulse time check  <<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -797,6 +780,14 @@ void loop() {
         writeMeterData( ii);
     }
   }
+
+  if ( errorIndex != previousErrorIndex)
+  {
+    publish_sketch_version();
+    previousErrorIndex = errorIndex;
+  } 
+
+
 }
 /*
  * ###################################################################################################
@@ -822,7 +813,6 @@ void writeConfigData()
     {
       SD_Failed = true;
       bitSet(errorIndex, 2);
-      publish_sketch_version();
     }
     structFile.close();
   } 
@@ -830,7 +820,6 @@ void writeConfigData()
   {
     SD_Failed = true;
     bitSet(errorIndex, 1);
-    publish_sketch_version();
   }
 }
 /* ###################################################################################################
@@ -845,7 +834,6 @@ void writeMeterDataFile( uint8_t datafileNumber)
   {
     SD_Failed = true;
     bitSet(errorIndex, 4);
-    publish_sketch_version();
   } else
   {
     structFile.seek(0);
@@ -853,7 +841,6 @@ void writeMeterDataFile( uint8_t datafileNumber)
     {
       SD_Failed = true;
       bitSet(errorIndex, 5);
-      publish_sketch_version();
     }
     structFile.close();
   }
@@ -869,7 +856,6 @@ void writeMeterData(uint8_t datafileNumber)
     {
       SD_Failed = true;
       bitSet(errorIndex, 3);
-      publish_sketch_version();
     } else
     {
       writeConfigData();
