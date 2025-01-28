@@ -11,7 +11,7 @@
 #include "SPI.h"
 #include "time.h"
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.2.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - DB4.2.0"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -226,7 +226,7 @@ String errorMessages[] = {
                           "creating directory for data files",    // Error index 3
                           "open / creating data files", 	      	// Error index 4
                           "writing data files", 		            	// Error index 5
-                         }
+                         };
 
 int errorIndex = 0;
               
@@ -320,6 +320,10 @@ void IRAM_ATTR Ext_INT5_ISR();
 void IRAM_ATTR Ext_INT6_ISR();
 void IRAM_ATTR Ext_INT7_ISR();
 void IRAM_ATTR Ext_INT8_ISR();
+                                                                                                      #ifdef DEBUG
+                                                                                                        void breakpoint();
+                                                                                                        void printDirectory( File, int);
+                                                                                                      #endif
 /*
  * ###################################################################################################
  * ###################################################################################################
@@ -336,6 +340,20 @@ void setup() {
  */
   delay( 2000);
 
+                                                                                                      #ifdef DEBUG
+                                                                                                        Serial.begin( 115200);
+                                                                                                        while (!Serial) {
+                                                                                                          ;  // Wait for serial connectionsbefore proceeding
+                                                                                                        }
+                                                                                                        Serial.println(SKETCH_VERSION);
+                                                                                                        Serial.println("Hit [Enter] to start!");
+                                                                                                        while (!Serial.available()) {
+                                                                                                          ;  // In order to prevent unattended execution, wait for [Enter].
+                                                                                                        }
+                                                                                                        while (Serial.available()) {
+                                                                                                          char c = Serial.read();  // Empty input buffer.
+                                                                                                        }
+                                                                                                      #endif                                                                                                     
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
   digitalWrite(LED_BUILTIN, LOW);          // Turn ON LED to indicate startup
 
@@ -375,7 +393,6 @@ void setup() {
   {
     SD_Failed = true;
     bitSet(errorIndex, 0);
-    publish_sketch_version();
   }
 
   if ( !SD_Failed )  // Reading configuration 
@@ -401,7 +418,7 @@ void setup() {
   {
     String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) +\
                               FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
-    structFile = SD.open(filename, FILE_READ);
+    File structFile = SD.open(filename, FILE_READ);
     if ( structFile && structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
           sizeof(meterData[ii])/sizeof(uint8_t)) 
     {
@@ -968,6 +985,7 @@ void publish_sketch_version()   // Publish only once at every reboot.
       errorIndexMask <<= 1;
     }
     versionMessage += String("\nSD Card failed to initialize!");
+  }  
 
   mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
 }
