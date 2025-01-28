@@ -55,6 +55,13 @@ shown on the energy meter multiplied be the number of pulses per kWh for the ene
 *** **Energy meter number** is a number 0..7 for the channel, on which the energy meter is connected.
 The relation between energy meter and channel number is defined in the privateConfig.h file.
 
+### SD Card failure.
+
+In case the SD card fails to record energy meter counts, the message "SD-Error" will be added to the entries in Google sheet. A more detailed message will be published to:
+````bash
+energy/monitor_ESP32_48E72997D320/sketch_version
+````
+
 ## Calculating Consumption
 Consumption is calculated on every pulse registrated. 
 

@@ -11,7 +11,7 @@
 #include "SPI.h"
 #include "time.h"
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.1.1"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.2.0"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -88,6 +88,8 @@
  * 4.1.1    BUGFIX:
  *         - Issue: Not all Home Assistant (HA) configurations are published. #8
  *         - Issue: "Forbrug" is published as 0 (zero) #9
+ * 4.2.0    Enhancements:
+ *        - Issue: Stop running when SC card fails #3
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -156,7 +158,7 @@
 #define RETAINED true                   // Used in MQTT puplications. Can be changed during development and bugfixing.
 #define UNRETAINED false
 #define MAX_NO_OF_CHANNELS 8
-#define NUMBER_OF_WRITES 65500          // Number of writes made to data file, before new set of datafiles will be used (MAX 2^16)
+#define MAX_NUMBER_OF_WRITES 65500      // Number of writes made to data file / SD Card, before new set of datafiles will be used (MAX 2^16)
 
 /* Configurable MQTT difinitions
  * These definitions can be changed to suitable nanes.
@@ -217,6 +219,17 @@ const int   daylightOffset_sec = 3600;
 
 String mqttDeviceNameWithMac;
 String mqttClientWithMac;
+String errorMessages[] = {
+                          "SD Card not initialized", 			        // Error index 0
+                          "open / Creating configuration file", 	// Error index 1
+                          "writing configuration file", 	      	// Error index 2
+                          "creating directory for data files",    // Error index 3
+                          "open / creating data files", 	      	// Error index 4
+                          "writing data files", 		            	// Error index 5
+                         }
+
+int errorIndex = 0;
+              
 
 uint16_t blip = BLIP;
 uint8_t GlobalIRQ_PIN_index = 0;
@@ -231,6 +244,7 @@ bool configurationPublished[PRIVATE_NO_OF_CHANNELS];  // a flag for publishing t
 bool esp32Connected = false;                          // Is true, when connected to WiFi and MQTT Broker
 bool LED_ToggledState = false; 
 bool LED_Invertred = false;
+bool SD_Failed = false;                               // Set to true if SD Card fails
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -282,7 +296,6 @@ volatile uint8_t  IRQ_PINs_stored = 0b00000000;   // Used by the ISR to register
  * ##################################################################################################
  * ##################################################################################################
  */
-void indicateError( uint8_t);
 void writeConfigData();
 void writeMeterDataFile( uint8_t);
 void writeMeterData(uint8_t);
@@ -360,15 +373,20 @@ void setup() {
  */
   if(!SD.begin(5))
   {
-    indicateError(1);
+    SD_Failed = true;
+    bitSet(errorIndex, 0);
+    publish_sketch_version();
   }
-  // Reading configuration 
-  String configFilename = String(CONFIGURATION_FILENAME);
-  File structFile = SD.open(configFilename, FILE_READ);
-  if ( structFile)
+
+  if ( !SD_Failed )  // Reading configuration 
   {
-    structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
-    structFile.close();
+    String configFilename = String(CONFIGURATION_FILENAME);
+    File structFile = SD.open(configFilename, FILE_READ);
+    if ( structFile)
+    {
+      structFile.read((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)/sizeof(uint8_t));
+      structFile.close();
+    }
   }
 
   // Check if new configuration and datafiles are required
@@ -377,31 +395,24 @@ void setup() {
     setConfigurationDefaults();
   }
 
-// Reading datafiles.
+  // Reading datafiles.
   uint16_t numberOfDatafilesRead = 0;
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
   {
     String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) +\
                               FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
     structFile = SD.open(filename, FILE_READ);
-    if ( structFile) {
-      if (structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
-          sizeof(meterData[ii])/sizeof(uint8_t))
-      {
-         numberOfDatafilesRead++;
-      } 
-      else
-      {
-        meterData[ii].pulseTotal = 0;
-        meterData[ii].pulseSubTotal = 0;
-      }
-      structFile.close();
-    }
+    if ( structFile && structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
+          sizeof(meterData[ii])/sizeof(uint8_t)) 
+    {
+      numberOfDatafilesRead++;
+    } 
     else
     {
       meterData[ii].pulseTotal = 0;
       meterData[ii].pulseSubTotal = 0;
     }
+    structFile.close();
   }
 
   // IF any datafiles in the current datafileset exists, create new datafileset
@@ -409,18 +420,28 @@ void setup() {
   {
     interfaceConfig.dataFileSetNumber++;
   }
-  writeConfigData();
+  
+  if ( !SD_Failed )
+  {
+    writeConfigData();
+  }
+
   // Create directory for data file set.
   String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
   if ( !SD.mkdir( dirname))
   {
-    indicateError(4);
+    SD_Failed = true;
+    bitSet(errorIndex, 1);
+    publish_sketch_version();
   }
 
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
   {
-    writeMeterData( ii);
+    if ( !SD_Failed )
+      writeMeterDataFile( ii);
   }
+
+
   digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
 }
 
@@ -656,8 +677,12 @@ void loop() {
         metaData[IRQ_PIN_index].pulseTimeStamp = millsTimeStamp[IRQ_PIN_index];
         meterData[IRQ_PIN_index].pulseTotal++;
         meterData[IRQ_PIN_index].pulseSubTotal++;
-        
-        writeMeterData( IRQ_PIN_index);
+
+        if ( !SD_Failed )
+        {
+          writeMeterData( IRQ_PIN_index);
+        }
+
         if ( esp32Connected) {
           publishSensorJson( watt_consumption, IRQ_PIN_index);
         }
@@ -751,7 +776,8 @@ void loop() {
     for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
     {
       meterData[ii].pulseSubTotal = 0;
-      writeMeterData( ii);
+      if ( !SD_Failed )
+        writeMeterData( ii);
     }
   }
 }
@@ -764,25 +790,6 @@ void loop() {
  * ###################################################################################################
  * ###################################################################################################
 */
-/*
- * Flashing LED to indicate an error
- * 
- */
-void indicateError( uint8_t errorNumber)
-{
-  digitalWrite(LED_BUILTIN, LOW);
-  while (true)
-  {
-    for ( uint8_t ii = 0; ii < errorNumber; ii++)
-    {
-      digitalWrite(LED_BUILTIN, HIGH);
-      delay( BLIP);
-      digitalWrite(LED_BUILTIN, LOW);
-      delay( BLIP);
-    }
-    delay( 1000);
-  }
-}
 /* ###################################################################################################
  *               W R I T E   C O N F I G   D A T A
  * ###################################################################################################
@@ -791,11 +798,23 @@ void writeConfigData()
 {
   String configFilename = String(CONFIGURATION_FILENAME);
   File structFile = SD.open(configFilename, FILE_WRITE);
-  if (!structFile)
-    indicateError(2);
-  structFile.seek(0);
-  structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig));
-  structFile.close();
+  if (structFile)
+  {
+    structFile.seek(0);
+    if ( structFile.write((uint8_t *)&interfaceConfig, sizeof(interfaceConfig)) != sizeof(interfaceConfig))
+    {
+      SD_Failed = true;
+      bitSet(errorIndex, 2);
+      publish_sketch_version();
+    }
+    structFile.close();
+  } 
+  else
+  {
+    SD_Failed = true;
+    bitSet(errorIndex, 1);
+    publish_sketch_version();
+  }
 }
 /* ###################################################################################################
  *               W R I T E   M E T E R   D A T A
@@ -807,23 +826,39 @@ void writeMeterDataFile( uint8_t datafileNumber)
   File structFile = SD.open(filename, FILE_WRITE);
   if (!structFile)
   {
-    indicateError(3);
+    SD_Failed = true;
+    bitSet(errorIndex, 4);
+    publish_sketch_version();
+  } else
+  {
+    structFile.seek(0);
+    if ( structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber])) != sizeof(meterData[datafileNumber]))
+    {
+      SD_Failed = true;
+      bitSet(errorIndex, 5);
+      publish_sketch_version();
+    }
+    structFile.close();
   }
-  structFile.seek(0);
-  structFile.write((uint8_t *)&meterData[datafileNumber], sizeof(meterData[datafileNumber]));
-  structFile.close(); 
 }
 
 void writeMeterData(uint8_t datafileNumber)
 {
-  if ( numberOfWrites++ >  NUMBER_OF_WRITES)
+  if ( numberOfWrites++ >  MAX_NUMBER_OF_WRITES)
   {
     interfaceConfig.dataFileSetNumber++;
     String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
-    SD.mkdir( dirname);
-    writeConfigData();
-    for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
-      writeMeterDataFile(ii);
+    if ( !SD.mkdir( dirname))
+    {
+      SD_Failed = true;
+      bitSet(errorIndex, 3);
+      publish_sketch_version();
+    } else
+    {
+      writeConfigData();
+      for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
+        writeMeterDataFile(ii);
+    }
   } else
     writeMeterDataFile(datafileNumber);
 }
@@ -847,29 +882,35 @@ void setConfigurationDefaults()
 {
   interfaceConfig.structureVersion = (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS;
   interfaceConfig.pulseTimeCorrection = 0;  // Used to calibrate the calculated consumption.
-
+  
   // Find new data file set for data files == Skip all existing data files.
-  uint8_t numberOfFilesExists = PRIVATE_NO_OF_CHANNELS;
-  for ( uint16_t filesetNumber = 0; numberOfFilesExists == PRIVATE_NO_OF_CHANNELS; filesetNumber++)
+  uint8_t numberOfFilesExists = 1;
+  for ( interfaceConfig.dataFileSetNumber = 0; numberOfFilesExists == 0; interfaceConfig.dataFileSetNumber++)
   {
-    interfaceConfig.dataFileSetNumber = filesetNumber;
     numberOfFilesExists = 0;
-    for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++)
+    if ( !SD_Failed)
     {
-      String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
-      if (SD.exists(dataFileName))
-        numberOfFilesExists++;
+      for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++)
+      {
+        String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
+        if (SD.exists(dataFileName))
+          numberOfFilesExists++;
+      }
     }
   }
+
   for (uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
     interfaceConfig.pulse_per_kWh[ii] = private_default_pulse_per_kWh[ii];    // Number of pulses as defined for each energy meter
 
-  String filename = String(CONFIGURATION_FILENAME);
-  if (SD.exists(filename))
+  if ( !SD_Failed)
   {
-    SD.remove(filename);
+    String filename = String(CONFIGURATION_FILENAME);
+    if (SD.exists(filename))
+    {
+      SD.remove(filename);
+    }
+    writeConfigData();
   }
-  writeConfigData();
 }
 /* ###################################################################################################
  *                     I N I T I A L I Z E   G L O B A L S
@@ -915,6 +956,18 @@ void publish_sketch_version()   // Publish only once at every reboot.
                                   String(ip[1]) + String(".") +\
                                   String(ip[2]) + String(".") +\
                                   String(ip[3]));
+
+  if ( SD_Failed)
+  {
+    versionMessage += String("\n");
+    uint8_t errorIndexMask = 0b00000001;
+    for ( uint8_t ii = 0; ii < 8; ii++)
+    {
+      if ( errorIndex & errorIndexMask)
+        versionMessage += String("\nError: ") + errorMessages[ii];
+      errorIndexMask <<= 1;
+    }
+    versionMessage += String("\nSD Card failed to initialize!");
 
   mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
 }
@@ -976,6 +1029,9 @@ bool updateGoogleSheets( uint8_t messageIndex)
     urlData += String(",PowerUp");
   if ( messageIndex == 2)
     urlData += String(",WiFiReconnect");
+  
+  if ( SD_Failed)
+    urlData += String(",SD-Error");
   
 
   // >>>>>>>>>>>>>   Create URL for HTTP request   <<<<<<<<<<<<<<<<<<
@@ -1349,7 +1405,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
     {
       meterData[ii].pulseSubTotal = 0;
-      writeMeterData( ii);
+      if ( !SD_Failed ) 
+        writeMeterData( ii);
     }
     
   }
