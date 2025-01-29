@@ -144,7 +144,7 @@
  */
 
 
-#define CONFIGURATON_VERSION 4
+#define CONFIGURATON_VERSION 5
 /* WiFi and MQTT connect attempt issues. 
  * IRQ's will be registrated, but the counters for will not be updated during the calls to WiFi and MQTT connect. If more than one pulse
  * from then same meter arrives, it will be lost if these calls takes up too much time. Setting a long connect postpone will reduce the loss
@@ -205,7 +205,7 @@ const String  MQTT_POWER_DEVICECLASS        = "power";
  * 
  */
 const String CONFIGURATION_FILENAME = "/config.cfg ";   // Filenames has to start with '/'
-const String DATAFILESET_POSTFIX    = "/fs-";           // Will bee the directory name
+const String DATAFILESET_POSTFIX    = "/fs_v2-";           // Will bee the directory name
 const String FILENAME_POSTFIX       = "/df-";           // Leading '/'. 
 const String FILENAME_SUFFIX        = ".dat";           //
 
@@ -220,12 +220,14 @@ const int   daylightOffset_sec = 3600;
 String mqttDeviceNameWithMac;
 String mqttClientWithMac;
 String errorMessages[] = {
-                          "SD Card not initialized", 			        // Error index 0
-                          "open / Creating configuration file", 	// Error index 1
-                          "writing configuration file", 	      	// Error index 2
-                          "creating directory for data files",    // Error index 3
-                          "open / creating data files", 	      	// Error index 4
-                          "writing data files", 		            	// Error index 5
+                          "0 SD Card not initialized", 			        // Error index 0
+                          "1 open / Creating configuration file", 	// Error index 1
+                          "2 writing configuration file", 	      	// Error index 2
+                          "3 creating directory for data files",    // Error index 3
+                          "4 open / creating data files", 	      	// Error index 4
+                          "5 writing data files", 		            	// Error index 5
+                          "6 Failed to update number of writes", 		// Error index 6
+                          "7 SD operation too slow" 	              // Error index 7
                          };
 
 int errorIndex = 0;
@@ -375,7 +377,7 @@ void setup() {
   if(!SD.begin(5))
   {
     SD_Failed = true;
-    bitSet(errorIndex, 0);
+    bitSet(errorIndex, 0);        // 0 SD Card not initialized
   }
 
   if ( !SD_Failed )  // Reading configuration 
@@ -393,51 +395,46 @@ void setup() {
   if ( interfaceConfig.structureVersion != (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS)
   {
     setConfigurationDefaults();
+
+    
   }
 
+  // Check if new datafileser (directory) is required
+  String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
+  if ( !SD.exists(dirname))
+  {
+    if ( !SD.mkdir( dirname))
+    {
+      SD_Failed = true;
+      bitSet(errorIndex, 3);
+    }
+  }
+
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String("writes") + FILENAME_SUFFIX);
+  File f = SD.open(filename, FILE_READ);
+  if ( f)
+  {
+    if ( f.read((uint8_t *)&numberOfWrites, sizeof(numberOfWrites)/sizeof(uint8_t)) != sizeof(numberOfWrites)/sizeof(uint8_t))
+      numberOfWrites = 0;
+   f.close();
+  }
+  else
+    numberOfWrites = 0;
+
+
   // Reading datafiles.
-  uint16_t numberOfDatafilesRead = 0;
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
   {
     String filename = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) +\
                               FILENAME_POSTFIX + String(ii) + FILENAME_SUFFIX);
     File structFile = SD.open(filename, FILE_READ);
-    if ( structFile && structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) ==\
+    if ( structFile && structFile.read((uint8_t *)&meterData[ii], sizeof(meterData[ii])/sizeof(uint8_t)) !=\
           sizeof(meterData[ii])/sizeof(uint8_t)) 
-    {
-      numberOfDatafilesRead++;
-    } 
-    else
     {
       meterData[ii].pulseTotal = 0;
       meterData[ii].pulseSubTotal = 0;
     }
     structFile.close();
-  }
-
-  // IF any datafiles in the current datafileset exists, create new datafileset
-  if (numberOfDatafilesRead > 0)
-  {
-    interfaceConfig.dataFileSetNumber++;
-  }
-  
-  if ( !SD_Failed )
-  {
-    writeConfigData();
-  }
-
-  // Create directory for data file set.
-  String dirname = String (DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber));
-  if ( !SD.mkdir( dirname))
-  {
-    SD_Failed = true;
-    bitSet(errorIndex, 1);
-  }
-
-  for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
-  {
-    if ( !SD_Failed )
-      writeMeterDataFile( ii);
   }
 
 
@@ -749,7 +746,7 @@ void loop()
     */
     if ( LED_ToggledState )
     {
-      if ( millis() < LED_toggledAt + blip or millis() < LED_toggledAt)
+      if ( millis() > LED_toggledAt + blip or millis() < LED_toggledAt)
       {
         digitalWrite(LED_BUILTIN, !digitalRead (LED_BUILTIN));
         LED_ToggledState = false;
@@ -823,7 +820,7 @@ void writeConfigData()
   }
 }
 /* ###################################################################################################
- *               W R I T E   M E T E R   D A T A
+ *               W R I T E   M E T E R   D A T A   T O   F I L E
  * ###################################################################################################
  */
 void writeMeterDataFile( uint8_t datafileNumber)
@@ -846,6 +843,10 @@ void writeMeterDataFile( uint8_t datafileNumber)
   }
 }
 
+/* ###################################################################################################
+ *               W R I T E   M E T E R   D A T A
+ * ###################################################################################################
+ */
 void writeMeterData(uint8_t datafileNumber)
 {
   if ( numberOfWrites++ >  MAX_NUMBER_OF_WRITES)
@@ -859,11 +860,29 @@ void writeMeterData(uint8_t datafileNumber)
     } else
     {
       writeConfigData();
+      numberOfWrites = 0;
       for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
         writeMeterDataFile(ii);
+
     }
   } else
+  {
     writeMeterDataFile(datafileNumber);
+  }
+
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String("writes") + FILENAME_SUFFIX);
+  File writesFile = SD.open(filename, FILE_WRITE);
+  if (writesFile)
+  {
+    writesFile.seek(0);
+    writesFile.write( (uint8_t *)&numberOfWrites, sizeof(numberOfWrites)/sizeof(uint8_t));
+    writesFile.close();
+  }
+  else
+  {
+    SD_Failed = true;
+    bitSet(errorIndex, 6);
+  }
 }
 
 /* ###################################################################################################
@@ -970,7 +989,6 @@ void publish_sketch_version()   // Publish only once at every reboot.
         versionMessage += String("\nError: ") + errorMessages[ii];
       errorIndexMask <<= 1;
     }
-    versionMessage += String("\nSD Card failed to initialize!");
   }  
 
   mqttClient.publish(versionTopic.c_str(), versionMessage.c_str(), RETAINED);
