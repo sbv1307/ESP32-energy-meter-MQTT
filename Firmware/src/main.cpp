@@ -232,7 +232,6 @@ String errorMessages[] = {
 
 int errorIndex = 0;
 int previousErrorIndex = 0;
-              
 
 uint16_t blip = BLIP;
 uint8_t GlobalIRQ_PIN_index = 0;
@@ -395,8 +394,6 @@ void setup() {
   if ( interfaceConfig.structureVersion != (CONFIGURATON_VERSION * 100) + PRIVATE_NO_OF_CHANNELS)
   {
     setConfigurationDefaults();
-
-    
   }
 
   // Check if new datafileser (directory) is required
@@ -421,7 +418,6 @@ void setup() {
   else
     numberOfWrites = 0;
 
-
   // Reading datafiles.
   for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
   {
@@ -436,7 +432,6 @@ void setup() {
     }
     structFile.close();
   }
-
 
   digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
 }
@@ -575,7 +570,8 @@ void loop()
     {
       String will = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_ONLINE);
 
-      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False"))
+      if ( mqttClient.connect( mqttClientWithMac.c_str(), PRIVATE_MQTT_USER.c_str(), 
+                               PRIVATE_MQTT_PASS.c_str(), will.c_str(), 1, RETAINED, "False"))
       {
         MQTTConnectAttempt = 0;
         MQTTConnectPostpone = 0;
@@ -624,8 +620,8 @@ void loop()
 
   // >>>>>>>>>>>>>>>>>>>>   Publis meterData (If any)   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   if ( IRQ_PINs_stored > 0)
-  {                                                           // If IRQ has occoured IRQ_PINs_store will be > 0.
-    uint8_t pinMask = 0b00000001;                             // Set pinMask to start check if the Least significant Bit (LSB) is set ( = 1)
+  {                                  // If IRQ has occoured IRQ_PINs_store will be > 0.
+    uint8_t pinMask = 0b00000001;    // Set pinMask to start check if the Least significant Bit (LSB) is set ( = 1)
 
     // >>>>>>>>>>>>>>>>  Tuggle LED pin if not toggled allready  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     if ( !LED_ToggledState)
@@ -661,11 +657,12 @@ void loop()
         if ( metaData[IRQ_PIN_index].pulseTimeStamp > 0 && metaData[IRQ_PIN_index].pulseTimeStamp < millsTimeStamp[IRQ_PIN_index])
         { 
           watt_consumption = round(((float)(60*60*1000) / 
-                                (float)(millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
-                                / (float)interfaceConfig.pulse_per_kWh[IRQ_PIN_index] * 1000);
+                                    (float)(millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp +
+                                    interfaceConfig.pulseTimeCorrection)) / 
+                                    (float)interfaceConfig.pulse_per_kWh[IRQ_PIN_index] * 1000);
 
-          metaData[IRQ_PIN_index].pulseLength = millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection;
-
+          metaData[IRQ_PIN_index].pulseLength = millsTimeStamp[IRQ_PIN_index] - metaData[IRQ_PIN_index].pulseTimeStamp +
+                                                interfaceConfig.pulseTimeCorrection;
         }
 
         //   >>>>>>>>>>>>>>>>>>>>>>>>>>>  Update meterData and publish totals   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -692,13 +689,16 @@ void loop()
 
   /* >>>>>>>>>>>>>>>>>>    Pulse time check  <<<<<<<<<<<<<<<<<<<<<<<<<<
 
-   * If a bit in IRQ_PINs_stored is set or being set during the pulse time check, further pulse time check's will be skipped
-   * because publishing meterData has priority.  
-   * If no bit's are set, check if then pulseTimeStamp indicate that comsumption has been reduced or stopped.
+   * If a bit in IRQ_PINs_stored is set or being set during the pulse time check, further pulse 
+   * time check's will be skipped because publishing meterData has priority.  
+   * If no bit's are set, check if then pulseTimeStamp indicate that comsumption has been 
+   * reduced or stopped.
    * 
-   * The assumption is: If a pulse has been missing for double the previous pulse period, comsumption has dropped
-   * and a new fictive comsumptino is published based on the double of the previous pulse period.
-   * This will goes on, until the calculated fictive comsumptino becomes less than the consumption, defined in MIN_CONSUMPTION.
+   * The assumption is: If a pulse has been missing for double the previous pulse period, 
+   * comsumption has dropped and a new fictive comsumptino is published based on the double 
+   * of the previous pulse period.
+   * This will goes on, until the calculated fictive comsumptino becomes less than the consumption, 
+   * defined in MIN_CONSUMPTION.
    */
   unsigned long timeStamp = millis();
   if ( GlobalIRQ_PIN_index >= PRIVATE_NO_OF_CHANNELS)
@@ -725,11 +725,13 @@ void loop()
       }
       else
       {  
-        if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp )
+        if (  metaData[GlobalIRQ_PIN_index].pulseTimeStamp + 
+              ( 2 * metaData[GlobalIRQ_PIN_index].pulseLength) < timeStamp )
         {
           long watt_consumption = round(((float)(60*60*1000) / 
-                                    (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + interfaceConfig.pulseTimeCorrection)) 
-                                    / (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
+                                    (float)(timeStamp - metaData[GlobalIRQ_PIN_index].pulseTimeStamp + 
+                                    interfaceConfig.pulseTimeCorrection)) /
+                                    (float)interfaceConfig.pulse_per_kWh[GlobalIRQ_PIN_index] * 1000);
 
           if ( watt_consumption < MIN_CONSUMPTION) {
             watt_consumption = 0;
@@ -783,8 +785,6 @@ void loop()
     publish_sketch_version();
     previousErrorIndex = errorIndex;
   } 
-
-
 }
 /*
  * ###################################################################################################
@@ -825,7 +825,8 @@ void writeConfigData()
  */
 void writeMeterDataFile( uint8_t datafileNumber)
 {
-  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + 
+                             FILENAME_POSTFIX + String(datafileNumber) + FILENAME_SUFFIX);
   File structFile = SD.open(filename, FILE_WRITE);
   if (!structFile)
   {
@@ -863,14 +864,14 @@ void writeMeterData(uint8_t datafileNumber)
       numberOfWrites = 0;
       for ( uint8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
         writeMeterDataFile(ii);
-
     }
   } else
   {
     writeMeterDataFile(datafileNumber);
   }
 
-  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String("writes") + FILENAME_SUFFIX);
+  String filename = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + 
+                             FILENAME_POSTFIX + String("writes") + FILENAME_SUFFIX);
   File writesFile = SD.open(filename, FILE_WRITE);
   if (writesFile)
   {
@@ -896,7 +897,7 @@ void writeMeterData(uint8_t datafileNumber)
  * It will skip all existing data file sets.
  * - int structureVersion;
  * - unsigned long pulseTimeCorrection;      // Used to calibrate the calculated consumption.
- * - uint16_t dataFileSetNumber;                  // In which data file set ("directory") the data files will be located.
+ * - uint16_t dataFileSetNumber;            // In which data file set ("directory") the data files will be located.
  * - uint16_t  pulse_per_kWh[PRIVATE_NO_OF_CHANNELS];       // Number of pulses as defined for each energy meter
  */
 
@@ -914,7 +915,8 @@ void setConfigurationDefaults()
     {
       for ( uint8_t iix = 0; iix < PRIVATE_NO_OF_CHANNELS; iix++)
       {
-        String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
+        String dataFileName = String ( DATAFILESET_POSTFIX + String(interfaceConfig.dataFileSetNumber) + 
+                                       FILENAME_POSTFIX + String(iix) + FILENAME_SUFFIX);
         if (SD.exists(dataFileName))
           numberOfFilesExists++;
       }
