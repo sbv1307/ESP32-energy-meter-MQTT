@@ -11,7 +11,7 @@
 #include "SPI.h"
 #include "time.h"
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.2.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.3.0"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -90,6 +90,8 @@
  *         - Issue: "Forbrug" is published as 0 (zero) #9
  * 4.2.0    Enhancements:
  *        - Issue: Stop running when SC card fails #3
+ * 4.3.0    Bugfix:
+ *       - Issue: Power outage cause <Google sheet update to fail #13
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -184,6 +186,7 @@ const String  MQTT_SUFFIX_TOTAL_TRESHOLD    = "/threshold";
 const String  MQTT_SUFFIX_SUBTOTAL_RESET    = "/subtotal_reset";
 const String  MQTT_SUFFIX_CONFIG            = "/config";
 const String  MQTT_SUFFIX_STATUS            = "status";
+const String  MQTT_SUFFIX_ESP_RESTART       = "/restart";
 
 /*  None configurable MQTT definitions
  *  These definitions are all defined in 'HomeAssistand -> MQTT' and cannot be changed.
@@ -487,6 +490,7 @@ void loop()
       // Init timecheck and post to Google Sheets
       secondsToNextTimeCheck = getsecondsToNextTimeCheck();
       timeLastCheckedAt = sec();
+
       if (PRIVATE_UPDATE_GOOGLE_SHEET)
       {
        if (updateGoogleSheets( GoogleSheetMessageIndex))
@@ -590,6 +594,9 @@ void loop()
 
         String configSetTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SUFFIX_CONFIG);
         mqttClient.subscribe(configSetTopic.c_str(), 1);
+
+        String restartSetTopic = String(MQTT_PREFIX + mqttDeviceNameWithMac + MQTT_SUFFIX_ESP_RESTART);
+        mqttClient.subscribe(restartSetTopic.c_str(), 1);
 
         String statusSetTopic = String(MQTT_DISCOVERY_PREFIX + MQTT_SUFFIX_STATUS);
         mqttClient.subscribe(statusSetTopic.c_str(), 1);
@@ -1095,6 +1102,9 @@ bool updateGoogleSheets( uint8_t messageIndex)
  * Doing it this way reduce the number of calls to the timeserver.
  * 
  * getsecondsToNextTimeCheck() returns 0 (zero) when it's called at the time defined.
+ *
+ * getsecondsToNextTimeCheck() returns 60 (for one minut) if the call to getLocalTime() (the timeserver) fails.
+ * 
  * 
  * Usage:
  * #include "time.h"
@@ -1135,7 +1145,7 @@ unsigned long getsecondsToNextTimeCheck()
 
   if(!getLocalTime(&timeinfo))
   {
-    return -1;
+    return 60;
   }
 
   if ( timeinfo.tm_hour == sc_hour and timeinfo.tm_min == sc_min)
@@ -1417,7 +1427,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     }
     writeConfigData();
   }
-  else if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET))
+  else if ( topicString.endsWith(MQTT_SUFFIX_SUBTOTAL_RESET) && !strncmp((char *)payload, "true", length))
   {
     /* Publish totals, subtotals to GS and reset subtotals. Done by
     * Publish: true
@@ -1440,6 +1450,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     {
       configurationPublished[ii] = false;
     } 
+  }
+  else if ( topicString.endsWith(MQTT_SUFFIX_ESP_RESTART) && !strncmp((char *)payload, "true", length))
+  {
+      ESP.restart();
   }
 }
 /*

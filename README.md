@@ -10,14 +10,14 @@ MQTT broker for each energy meter.
 The MQTT topic and payload will be compliant with the Home Assistant (HA) integration
 MQTT sensor and number integration's.
 
-Subtotals is a periodic count, resat every time ‘true’ is published to the topic:
+The interface will publish kWh (Totals) and subtotals to Google Sheets at the time defined by SCHEDULE_HOUR and SCHEDULE_MINUTE in the privateConfig.h file.
+
+Subtotals is a periodic count, resat every time kWh (Totals) and subtotals are published to Google Sheets or **true** is published to the topic:
 ````bash
 energy/monitor_ESP32_48E72997D320/subtotal_reset
 ````
 at the MQTT broker connected.
 
-The interface will publish kWh (Totals), subtotals to Google Sheets at the time defined by 
-SCHEDULE_MINUTE and SCHEDULE_HOUR.
 
 Upon reset of subtotals, the interface will publish kWh and subtotals to Google sheets through
 a HTTPS GET request, using Google sheet’s doGet() function.
@@ -47,6 +47,13 @@ To get information about the current running version, subscribe to topic:
 ````bash
 energy/monitor_ESP32_48E72997D320/sketch_version
 ````
+
+The Esp32 MQTT interface can be restarted (rebooed) by publishing **true** to the topic:
+
+````bash
+energy/monitor_ESP32_48E72997D320/restart
+````
+
 
 ** **pulse-counts** in the number of pulses counted by the energy meter. It is calculated by the kWh,
 shown on the energy meter multiplied be the number of pulses per kWh for the energy meter. 
