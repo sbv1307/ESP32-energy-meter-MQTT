@@ -92,6 +92,8 @@
  *        - Issue: Stop running when SC card fails #3
  * 4.3.0    Bugfix:
  *       - Issue: Power outage cause <Google sheet update to fail #13
+ * 4.4.0   Enhancements:
+ *       - Issue: LED_BOILTIN on when external LED is OFF #10
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -342,7 +344,7 @@ void setup() {
   delay( 2000);
 
   pinMode(LED_BUILTIN, OUTPUT);             // Initialize build in LED           
-  digitalWrite(LED_BUILTIN, LOW);          // Turn ON LED to indicate startup
+  digitalWrite(LED_BUILTIN, HIGH);          // Turn ON LED to indicate startup
 
   // Initialize Interrupt pins
   for ( u_int8_t ii = 0; ii < PRIVATE_NO_OF_CHANNELS; ii++)
@@ -436,7 +438,7 @@ void setup() {
     structFile.close();
   }
 
-  digitalWrite(LED_BUILTIN, HIGH);           // Turn OFF LED before entering loop
+  digitalWrite(LED_BUILTIN, LOW);           // Turn OFF LED before entering loop
 }
 
 /*
