@@ -14,6 +14,7 @@ Firmware/src/privateConfig.h
 Hardware/energiRegistrationForHA-backups/*
 Hardware/library/
 Hardware/JLCPCB/*
+Hardware/*.lck
 Library/*
 *.pdf
 *.dat
