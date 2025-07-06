@@ -5307,6 +5307,12 @@
 		(uuid "7faf3363-ad9c-46d2-963e-3640470afd63")
 	)
 	(junction
+		(at 144.78 83.82)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "829f21f7-6123-4214-8d90-8c49c3f5d277")
+	)
+	(junction
 		(at 240.03 48.26)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -5361,6 +5367,12 @@
 		(uuid "af9ed70a-f363-4956-aab5-e08070dce8b3")
 	)
 	(junction
+		(at 137.16 83.82)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b6903e3b-6935-4e4d-94db-e4cb83ff1d7e")
+	)
+	(junction
 		(at 233.68 100.33)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -5401,6 +5413,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "cfa28485-b860-4d4b-90ab-b7e7cd55150f")
+	)
+	(junction
+		(at 137.16 72.39)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ec899204-f381-465b-83cd-b796b41aab47")
 	)
 	(junction
 		(at 228.6 48.26)
@@ -5453,7 +5471,7 @@
 		(uuid "308afd7a-38fc-48ed-8302-9ab171306644")
 	)
 	(no_connect
-		(at 68.58 167.64)
+		(at 171.45 83.82)
 		(uuid "4e876f3f-14a6-4b86-8381-f08cfbaf5c22")
 	)
 	(no_connect
@@ -5734,7 +5752,7 @@
 	)
 	(wire
 		(pts
-			(xy 137.16 54.61) (xy 137.16 96.52)
+			(xy 137.16 54.61) (xy 137.16 72.39)
 		)
 		(stroke
 			(width 0)
@@ -5841,6 +5859,16 @@
 			(type default)
 		)
 		(uuid "4ceaf30b-2a52-4933-8305-5d34986f07bf")
+	)
+	(wire
+		(pts
+			(xy 137.16 72.39) (xy 137.16 74.93)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4cf3ee9c-33c3-4e71-b5ff-e21953e9c487")
 	)
 	(wire
 		(pts
@@ -6194,6 +6222,16 @@
 	)
 	(wire
 		(pts
+			(xy 137.16 83.82) (xy 137.16 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9159839a-531d-4841-b149-3e1ab931fce4")
+	)
+	(wire
+		(pts
 			(xy 132.08 101.6) (xy 196.85 101.6)
 		)
 		(stroke
@@ -6234,6 +6272,16 @@
 	)
 	(wire
 		(pts
+			(xy 163.83 72.39) (xy 137.16 72.39)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "95fe80eb-506f-4cb8-b770-f41a8e76ce58")
+	)
+	(wire
+		(pts
 			(xy 95.25 137.16) (xy 101.6 137.16)
 		)
 		(stroke
@@ -6261,6 +6309,16 @@
 			(type default)
 		)
 		(uuid "9a57f5da-9557-4142-94fc-79ae6515e6a5")
+	)
+	(wire
+		(pts
+			(xy 137.16 83.82) (xy 144.78 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9ac1e0ee-fe90-49ed-8f62-3d23a776d62a")
 	)
 	(wire
 		(pts
@@ -6444,6 +6502,16 @@
 	)
 	(wire
 		(pts
+			(xy 144.78 93.98) (xy 146.05 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b6febfe1-e0bc-4487-87e0-bf21718bc84f")
+	)
+	(wire
+		(pts
 			(xy 72.39 132.08) (xy 72.39 133.35)
 		)
 		(stroke
@@ -6471,6 +6539,16 @@
 			(type default)
 		)
 		(uuid "ba30f61b-7f39-48a3-8b70-7c9d620c7e22")
+	)
+	(wire
+		(pts
+			(xy 137.16 78.74) (xy 137.16 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bae96a41-b923-4702-88f4-a2ad913b7730")
 	)
 	(wire
 		(pts
@@ -6511,6 +6589,16 @@
 			(type default)
 		)
 		(uuid "c1352f3f-d5d1-4645-a49f-21be3e1dd171")
+	)
+	(wire
+		(pts
+			(xy 163.83 83.82) (xy 163.83 72.39)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c456738a-9cb1-412d-b1bb-4c2fdf632d62")
 	)
 	(wire
 		(pts
@@ -6581,16 +6669,6 @@
 			(type default)
 		)
 		(uuid "ca49c2ad-fc3c-4e89-b850-5d39d2b0b0cc")
-	)
-	(wire
-		(pts
-			(xy 29.21 167.64) (xy 30.48 167.64)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ca78784f-f78b-441d-bff8-b77355dc20c4")
 	)
 	(wire
 		(pts
@@ -6854,7 +6932,7 @@
 	)
 	(wire
 		(pts
-			(xy 57.15 167.64) (xy 58.42 167.64)
+			(xy 160.02 83.82) (xy 161.29 83.82)
 		)
 		(stroke
 			(width 0)
@@ -6912,15 +6990,15 @@
 		)
 		(uuid "fcd30ed7-bd92-4e99-a020-a9f65da198d7")
 	)
-	(wire
-		(pts
-			(xy 40.64 167.64) (xy 41.91 167.64)
+	(text "Modification to HW Version 1.\nJP1 To be opned in order to operate.\n"
+		(exclude_from_sim no)
+		(at 164.084 91.948 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ffd5103c-9a43-40fa-a7ea-6a1afaa5c13a")
+		(uuid "3e6f19b5-b25c-4420-8b4b-766711fc5461")
 	)
 	(label "+3.3V"
 		(at 187.96 21.59 180)
@@ -8259,7 +8337,7 @@
 	)
 	(symbol
 		(lib_id "Local_Connectors_Library:SolderJumper_2_Bridged")
-		(at 63.5 167.64 0)
+		(at 166.37 83.82 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom no)
@@ -8267,7 +8345,7 @@
 		(dnp no)
 		(uuid "23cc423e-485f-4814-bc65-0c0634b11b63")
 		(property "Reference" "JP4"
-			(at 63.5 165.1 0)
+			(at 166.37 81.28 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8275,7 +8353,7 @@
 			)
 		)
 		(property "Value" "SolderJumper_2_Bridged"
-			(at 63.5 162.56 0)
+			(at 166.37 78.74 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8284,7 +8362,7 @@
 			)
 		)
 		(property "Footprint" "Local_Connectors:SolderJumper-2_P1.3mm_Bridged_RoundedPad1.0x1.5mm(F.Mount)"
-			(at 63.7032 174.6504 0)
+			(at 166.5732 90.8304 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8293,7 +8371,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 63.4492 173.6344 0)
+			(at 166.3192 89.8144 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8302,7 +8380,7 @@
 			)
 		)
 		(property "Description" "SolderJumper, 2-pole, closed/bridged"
-			(at 62.7888 174.3964 0)
+			(at 165.6588 90.5764 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8311,7 +8389,7 @@
 			)
 		)
 		(property "Mount Option" "F.Mount"
-			(at 63.5 165.1 0)
+			(at 166.37 81.28 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8320,7 +8398,7 @@
 			)
 		)
 		(property "LibPart" "Local_Connectors_library:Jumper_2_Bridged"
-			(at 63.5508 174.4472 0)
+			(at 166.4208 90.6272 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8329,7 +8407,7 @@
 			)
 		)
 		(property "Category" "Jumpers"
-			(at 63.5 174.5488 0)
+			(at 166.37 90.7288 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8338,7 +8416,7 @@
 			)
 		)
 		(property "Famely" "SMD Solder Jumper"
-			(at 63.4492 174.9552 0)
+			(at 166.3192 91.1352 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8347,7 +8425,7 @@
 			)
 		)
 		(property "Excluded from BOM" "YES"
-			(at 63.5 175.006 0)
+			(at 166.37 91.186 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12751,7 +12829,7 @@
 	)
 	(symbol
 		(lib_id "Local_Miscellaneous_Library:74HC14-local_74HCxx")
-		(at 49.53 167.64 0)
+		(at 152.4 83.82 0)
 		(unit 3)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -12760,7 +12838,7 @@
 		(fields_autoplaced yes)
 		(uuid "76380187-e333-44c4-b469-a3120c62bc2b")
 		(property "Reference" "U2"
-			(at 49.53 158.75 0)
+			(at 152.4 74.93 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12768,7 +12846,7 @@
 			)
 		)
 		(property "Value" "74HC14"
-			(at 49.53 161.29 0)
+			(at 152.4 77.47 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12776,7 +12854,7 @@
 			)
 		)
 		(property "Footprint" "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12785,7 +12863,7 @@
 			)
 		)
 		(property "Datasheet" "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1811141851_Nexperia-74HC14D-653_C5605.pdf"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12794,7 +12872,7 @@
 			)
 		)
 		(property "Description" "Schmitt Trigger 6 21ns@6V,50pF 2uA 2V~6V SOIC-14  Inverters ROHS"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12803,7 +12881,7 @@
 			)
 		)
 		(property "Package" "SOIC-14"
-			(at 49.53 167.64 0)
+			(at 152.4 83.82 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12812,7 +12890,7 @@
 			)
 		)
 		(property "LibPart" "Local_Miscellaneous_Library:74HC14-local_74HCxx"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12821,7 +12899,7 @@
 			)
 		)
 		(property "JLCBCB Part" "https://jlcpcb.com/partdetail/Nexperia-74HC14D653/C5605"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12830,7 +12908,7 @@
 			)
 		)
 		(property "JLCPCB Part #" "C5605"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12839,7 +12917,7 @@
 			)
 		)
 		(property "JLCPCB Basic or Extended" "Basic Part"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12848,7 +12926,7 @@
 			)
 		)
 		(property "Manufacturer" "Nexperia"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12857,7 +12935,7 @@
 			)
 		)
 		(property "MFR. Part #" "74HC14D,653"
-			(at 49.276 174.244 0)
+			(at 152.146 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12866,7 +12944,7 @@
 			)
 		)
 		(property "Category" "Logic"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12875,7 +12953,7 @@
 			)
 		)
 		(property "Famely" "Inverters"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12884,7 +12962,7 @@
 			)
 		)
 		(property "Excluded from BOM" "NO"
-			(at 49.53 174.244 0)
+			(at 152.4 90.424 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -14710,7 +14788,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 29.21 167.64 0)
+		(at 146.05 93.98 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -14719,7 +14797,7 @@
 		(fields_autoplaced yes)
 		(uuid "9c235d10-3512-4e83-ac0a-4211d072ae8a")
 		(property "Reference" "#PWR025"
-			(at 29.21 173.99 0)
+			(at 146.05 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -14728,7 +14806,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 29.21 172.72 0)
+			(at 146.05 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -14736,7 +14814,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 29.21 167.64 0)
+			(at 146.05 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -14745,7 +14823,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 29.21 167.64 0)
+			(at 146.05 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -14754,7 +14832,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 29.21 167.64 0)
+			(at 146.05 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15401,7 +15479,7 @@
 	)
 	(symbol
 		(lib_id "Local_Connectors_Library:SolderJumper_2_Bridged")
-		(at 35.56 167.64 0)
+		(at 144.78 88.9 90)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom no)
@@ -15409,7 +15487,7 @@
 		(dnp no)
 		(uuid "b1270736-ad4c-47d2-be21-51d95267eb8f")
 		(property "Reference" "JP1"
-			(at 35.56 165.354 0)
+			(at 142.494 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15417,7 +15495,7 @@
 			)
 		)
 		(property "Value" "SolderJumper_2_Bridged"
-			(at 35.56 162.56 0)
+			(at 139.7 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15426,7 +15504,7 @@
 			)
 		)
 		(property "Footprint" "Local_Connectors:SolderJumper-2_P1.3mm_Bridged_RoundedPad1.0x1.5mm(F.Mount)"
-			(at 35.7632 174.6504 0)
+			(at 151.7904 88.6968 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15435,7 +15513,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 35.5092 173.6344 0)
+			(at 150.7744 88.9508 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15444,7 +15522,7 @@
 			)
 		)
 		(property "Description" "SolderJumper, 2-pole, closed/bridged"
-			(at 34.8488 174.3964 0)
+			(at 151.5364 89.6112 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15453,7 +15531,7 @@
 			)
 		)
 		(property "Mount Option" "F.Mount"
-			(at 35.56 165.1 0)
+			(at 142.24 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15462,7 +15540,7 @@
 			)
 		)
 		(property "LibPart" "Local_Connectors_library:Jumper_2_Bridged"
-			(at 35.6108 174.4472 0)
+			(at 151.5872 88.8492 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15471,7 +15549,7 @@
 			)
 		)
 		(property "Category" "Jumpers"
-			(at 35.56 174.5488 0)
+			(at 151.6888 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15480,7 +15558,7 @@
 			)
 		)
 		(property "Famely" "SMD Solder Jumper"
-			(at 35.5092 174.9552 0)
+			(at 152.0952 88.9508 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15489,7 +15567,7 @@
 			)
 		)
 		(property "Excluded from BOM" "YES"
-			(at 35.56 175.006 0)
+			(at 152.146 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -16068,10 +16146,9 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "c9c3d639-025c-4e28-96e4-e72757d2104f")
 		(property "Reference" "U2"
-			(at 49.53 168.91 0)
+			(at 152.4 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -16079,7 +16156,7 @@
 			)
 		)
 		(property "Value" "74HC14"
-			(at 49.53 171.45 0)
+			(at 152.4 87.63 0)
 			(effects
 				(font
 					(size 1.27 1.27)
