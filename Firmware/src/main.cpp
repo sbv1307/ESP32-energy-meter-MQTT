@@ -11,7 +11,7 @@
 #include "SPI.h"
 #include "time.h"
 
-#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.4.0"
+#define SKETCH_VERSION "Esp32 MQTT interface for Carlo Gavazzi energy meter - V4.4.1"
 
 /*
  * This is an Esp32 MQTT interface for up till eight Carlo Gavazzi energy meters type
@@ -94,6 +94,8 @@
  *       - Issue: Power outage cause <Google sheet update to fail #13
  * 4.4.0   Enhancements:
  *       - Issue: LED_BOILTIN on when external LED is OFF #10
+ * 4.4.1   enhancements:
+ *       - Issue: Walues not published before activity after restart. #14
  *          
  * Boot analysis:
  * Esp32 MQTT interface for Carlo Gavazzi energy meter - V2.0.0
@@ -719,6 +721,10 @@ void loop()
     if( esp32Connected and !configurationPublished[GlobalIRQ_PIN_index])
     {
       publishMqttConfigurations( GlobalIRQ_PIN_index);
+      if ( metaData[GlobalIRQ_PIN_index].pulseLength == 0 )
+      {
+        publishSensorJson( 0, GlobalIRQ_PIN_index);
+      }
     }
 
     // At startup pulseTimeStamp will be 0 ==> Comsumptino unknown ==> No need to recalculation
